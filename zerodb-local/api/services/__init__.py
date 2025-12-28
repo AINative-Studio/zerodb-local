@@ -7,6 +7,7 @@ from .qdrant_service import qdrant_service
 from .minio_service import minio_service
 from .redpanda_service import redpanda_service
 from .embeddings_service import embeddings_service
+from .vector_service import vector_service
 
 __all__ = [
     "database_service",
@@ -14,4 +15,5 @@ __all__ = [
     "minio_service",
     "redpanda_service",
     "embeddings_service",
+    "vector_service",
 ]
