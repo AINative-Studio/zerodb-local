@@ -11,6 +11,7 @@ from .vector_service import vector_service
 from .memory_service import memory_service
 from .events_service import events_service
 from .files_service import files_service
+from .tables_service import tables_service
 
 __all__ = [
     "database_service",
@@ -22,4 +23,5 @@ __all__ = [
     "memory_service",
     "events_service",
     "files_service",
+    "tables_service",
 ]
