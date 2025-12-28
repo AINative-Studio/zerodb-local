@@ -11,6 +11,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 # Import health check
 from health import get_aggregated_health
 
+# Import middleware
+from middleware import setup_error_handlers
+
 # Import routers
 from routers import (
     projects_router,
@@ -94,6 +97,9 @@ app = FastAPI(
     redoc_url="/redoc" if ENABLE_DOCS else None,
     openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
+
+# Setup global error handlers
+setup_error_handlers(app)
 
 # CORS Middleware - Allow dashboard and other local services
 app.add_middleware(
