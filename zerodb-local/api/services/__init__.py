@@ -9,6 +9,7 @@ from .redpanda_service import redpanda_service
 from .embeddings_service import embeddings_service
 from .vector_service import vector_service
 from .memory_service import memory_service
+from .events_service import events_service
 
 __all__ = [
     "database_service",
@@ -18,4 +19,5 @@ __all__ = [
     "embeddings_service",
     "vector_service",
     "memory_service",
+    "events_service",
 ]
