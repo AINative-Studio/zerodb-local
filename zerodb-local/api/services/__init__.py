@@ -10,6 +10,7 @@ from .embeddings_service import embeddings_service
 from .vector_service import vector_service
 from .memory_service import memory_service
 from .events_service import events_service
+from .files_service import files_service
 
 __all__ = [
     "database_service",
@@ -20,4 +21,5 @@ __all__ = [
     "vector_service",
     "memory_service",
     "events_service",
+    "files_service",
 ]
