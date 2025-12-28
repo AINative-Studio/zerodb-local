@@ -396,11 +396,12 @@ See `.env.local.example` for complete list. Key variables:
 
 ## Documentation
 
-- **Quick Start**: `docs/QUICK_START.md`
-- **API Reference**: http://localhost:8000/docs
-- **CLI Reference**: `zerodb --help`
-- **Sync Guide**: `docs/SYNC_GUIDE.md`
-- **Troubleshooting**: `docs/TROUBLESHOOTING.md`
+- **Quick Start**: [docs/QUICK_START.md](./docs/QUICK_START.md) - Step-by-step setup guide
+- **Environment Setup**: [docs/ENVIRONMENT_SETUP.md](./docs/ENVIRONMENT_SETUP.md) - Configuration for local/staging/production
+- **Data Management**: [docs/DATA_MANAGEMENT.md](./docs/DATA_MANAGEMENT.md) - Backups, restores, and data lifecycle
+- **Troubleshooting**: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) - Common issues and solutions
+- **Sync Strategy**: [docs/SYNC_STRATEGY.md](./docs/SYNC_STRATEGY.md) - Cloud sync configuration
+- **API Reference**: http://localhost:8000/docs - Interactive API documentation
 
 ## Support
 
