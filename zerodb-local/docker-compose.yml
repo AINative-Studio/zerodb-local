@@ -1,0 +1,214 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector extension for vector storage
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zerodb-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zerodb_local}
+      POSTGRES_USER: ${POSTGRES_USER:-zerodb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localpass}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - zerodb-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerodb} -d ${POSTGRES_DB:-zerodb_local}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Qdrant vector database for high-performance similarity search
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: zerodb-qdrant
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC API
+    networks:
+      - zerodb-network
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MinIO S3-compatible object storage for files
+  minio:
+    image: minio/minio:latest
+    container_name: zerodb-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - ./data/minio:/data
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    networks:
+      - zerodb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # RedPanda event streaming (Kafka-compatible)
+  redpanda:
+    image: vectorized/redpanda:latest
+    container_name: zerodb-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --memory
+      - "1G"
+      - --reserve-memory
+      - "0M"
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - "PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092"
+      - --advertise-kafka-addr
+      - "PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092"
+      - --pandaproxy-addr
+      - "0.0.0.0:8082"
+      - --advertise-pandaproxy-addr
+      - "localhost:8082"
+      - --rpc-addr
+      - "0.0.0.0:33145"
+      - --advertise-rpc-addr
+      - "redpanda:33145"
+    volumes:
+      - ./data/redpanda:/var/lib/redpanda/data
+    ports:
+      - "9092:9092"   # Kafka API
+      - "8082:8082"   # HTTP Proxy
+      - "9644:9644"   # Admin API
+    networks:
+      - zerodb-network
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep 'Healthy:.*true' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Local embeddings service (BAAI BGE models)
+  embeddings:
+    build:
+      context: ./embeddings
+      dockerfile: Dockerfile
+    container_name: zerodb-embeddings
+    environment:
+      MODEL_NAME: ${EMBEDDINGS_MODEL:-BAAI/bge-small-en-v1.5}
+      DEVICE: ${EMBEDDINGS_DEVICE:-cpu}
+    volumes:
+      - ./data/embeddings/models:/app/models
+    ports:
+      - "8001:8001"
+    networks:
+      - zerodb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # ZeroDB Local API server
+  zerodb-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: zerodb-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      embeddings:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-zerodb}:${POSTGRES_PASSWORD:-localpass}@postgres:5432/${POSTGRES_DB:-zerodb_local}
+
+      # Services
+      QDRANT_URL: http://qdrant:6333
+      MINIO_URL: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      REDPANDA_URL: redpanda:9092
+      EMBEDDINGS_URL: http://embeddings:8001
+
+      # Cloud API (for sync)
+      CLOUD_API_URL: ${CLOUD_API_URL:-https://api.ainative.studio}
+      CLOUD_API_KEY: ${CLOUD_API_KEY:-}
+
+      # Environment
+      ZERODB_ENV: ${ZERODB_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./api:/app
+    ports:
+      - "8000:8000"
+    networks:
+      - zerodb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ZeroDB Local Dashboard (React UI)
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: zerodb-dashboard
+    depends_on:
+      zerodb-api:
+        condition: service_healthy
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_API_INTERNAL_URL: http://zerodb-api:8000
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    networks:
+      - zerodb-network
+    restart: unless-stopped
+
+networks:
+  zerodb-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  minio-data:
+  redpanda-data:
+  embeddings-models:
