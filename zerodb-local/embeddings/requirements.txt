@@ -1,0 +1,14 @@
+# ZeroDB Local Embeddings Service Dependencies
+
+# FastAPI and ASGI server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+
+# Sentence transformers for embeddings
+sentence-transformers==2.3.1
+transformers==4.37.2
+torch==2.1.2
+
+# Utilities
+numpy==1.26.3
