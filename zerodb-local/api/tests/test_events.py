@@ -197,6 +197,106 @@ class TestEventsEndpoints:
         assert "topic" in data
         assert data["event_types"] == subscription_data["event_types"]
 
+    def test_event_with_correlation_id(self, client: TestClient, sample_event_data):
+        """Test creating event with correlation_id for tracing"""
+        correlation_id = "trace-12345-xyz"
+        sample_event_data["correlation_id"] = correlation_id
+
+        response = client.post(
+            f"/v1/projects/{self.project_id}/database/events",
+            json=sample_event_data
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["correlation_id"] == correlation_id
+
+    def test_event_pagination(self, client: TestClient, sample_event_data):
+        """Test event pagination with skip and limit"""
+        # Create 25 events
+        for i in range(25):
+            event_data = sample_event_data.copy()
+            event_data["event_data"]["index"] = i
+            client.post(
+                f"/v1/projects/{self.project_id}/database/events",
+                json=event_data
+            )
+
+        # First page
+        response1 = client.get(
+            f"/v1/projects/{self.project_id}/database/events?skip=0&limit=10"
+        )
+        assert response1.status_code == 200
+        page1 = response1.json()
+        assert len(page1) == 10
+
+        # Second page
+        response2 = client.get(
+            f"/v1/projects/{self.project_id}/database/events?skip=10&limit=10"
+        )
+        assert response2.status_code == 200
+        page2 = response2.json()
+        assert len(page2) == 10
+
+        # Third page
+        response3 = client.get(
+            f"/v1/projects/{self.project_id}/database/events?skip=20&limit=10"
+        )
+        assert response3.status_code == 200
+        page3 = response3.json()
+        assert len(page3) >= 5
+
+        # Ensure no duplicates between pages
+        page1_ids = {event["id"] for event in page1}
+        page2_ids = {event["id"] for event in page2}
+        assert len(page1_ids & page2_ids) == 0
+
+    def test_event_stats_invalid_time_range(self, client: TestClient):
+        """Test event stats with invalid time_range returns 400"""
+        response = client.get(
+            f"/v1/projects/{self.project_id}/database/events/stats/summary?time_range=invalid"
+        )
+
+        assert response.status_code == 400
+        assert "time_range must be" in response.json()["detail"]
+
+    def test_event_with_complex_data(self, client: TestClient):
+        """Test creating event with complex nested event_data"""
+        complex_event = {
+            "event_type": "complex_event",
+            "event_data": {
+                "user": {
+                    "id": "user_123",
+                    "email": "user@example.com",
+                    "metadata": {
+                        "preferences": ["email", "push"],
+                        "settings": {
+                            "theme": "dark",
+                            "language": "en"
+                        }
+                    }
+                },
+                "action": {
+                    "type": "purchase",
+                    "items": [
+                        {"id": "item_1", "price": 10.99},
+                        {"id": "item_2", "price": 5.50}
+                    ],
+                    "total": 16.49
+                }
+            },
+            "source": "web_app"
+        }
+
+        response = client.post(
+            f"/v1/projects/{self.project_id}/database/events",
+            json=complex_event
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["event_data"] == complex_event["event_data"]
+
 
 @pytest.mark.slow
 class TestEventsPerformance:
