@@ -119,6 +119,62 @@ class ServiceUnavailableError(ZeroDBError):
         )
 
 
+# Cloud API specific errors
+class CloudAPIAuthenticationError(ZeroDBError):
+    """Cloud API authentication error (401)"""
+    def __init__(self, message: str = "Cloud API authentication failed", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_type="cloud_auth_error",
+            status_code=401
+        )
+        self.api_details = details
+
+
+class CloudAPIConnectionError(ZeroDBError):
+    """Cloud API connection error"""
+    def __init__(self, message: str, url: Optional[str] = None):
+        super().__init__(
+            message=message,
+            error_type="cloud_connection_error",
+            status_code=503
+        )
+        self.url = url
+
+
+class CloudAPINotFoundError(ZeroDBError):
+    """Cloud API resource not found error (404)"""
+    def __init__(self, message: str = "Resource not found in cloud", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_type="cloud_not_found_error",
+            status_code=404
+        )
+        self.api_details = details
+
+
+class CloudAPIServerError(ZeroDBError):
+    """Cloud API server error (500+)"""
+    def __init__(self, message: str, status_code: int = 500, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_type="cloud_server_error",
+            status_code=status_code
+        )
+        self.api_details = details
+
+
+class CloudAPITimeoutError(ZeroDBError):
+    """Cloud API timeout error"""
+    def __init__(self, message: str, timeout: Optional[int] = None):
+        super().__init__(
+            message=message,
+            error_type="cloud_timeout_error",
+            status_code=504
+        )
+        self.timeout = timeout
+
+
 # Error code mappings for database constraints
 DATABASE_ERROR_CODES = {
     "23505": "duplicate_key",  # Unique violation
