@@ -175,6 +175,17 @@ class CloudAPITimeoutError(ZeroDBError):
         self.timeout = timeout
 
 
+class ImportError(ZeroDBError):
+    """Import operation error"""
+    def __init__(self, message: str, details: Optional[List[ErrorDetail]] = None):
+        super().__init__(
+            message=message,
+            error_type="import_error",
+            details=details,
+            status_code=500
+        )
+
+
 # Error code mappings for database constraints
 DATABASE_ERROR_CODES = {
     "23505": "duplicate_key",  # Unique violation
