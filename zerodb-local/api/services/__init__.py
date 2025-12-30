@@ -1,17 +1,8 @@
 """
 Services Package
 Exports all service instances for easy import
+Uses lazy imports to avoid eager instantiation
 """
-from .database_service import database_service
-from .qdrant_service import qdrant_service
-from .minio_service import minio_service
-from .redpanda_service import redpanda_service
-from .embeddings_service import embeddings_service
-from .vector_service import vector_service
-from .memory_service import memory_service
-from .events_service import events_service
-from .files_service import files_service
-from .tables_service import tables_service
 
 __all__ = [
     "database_service",
@@ -24,4 +15,43 @@ __all__ = [
     "events_service",
     "files_service",
     "tables_service",
+    "CloudAPIClient"
 ]
+
+
+def __getattr__(name):
+    """Lazy import services on demand to avoid eager initialization"""
+    if name == "database_service":
+        from .database_service import database_service
+        return database_service
+    elif name == "qdrant_service":
+        from .qdrant_service import qdrant_service
+        return qdrant_service
+    elif name == "minio_service":
+        from .minio_service import minio_service
+        return minio_service
+    elif name == "redpanda_service":
+        from .redpanda_service import redpanda_service
+        return redpanda_service
+    elif name == "embeddings_service":
+        from .embeddings_service import embeddings_service
+        return embeddings_service
+    elif name == "vector_service":
+        from .vector_service import vector_service
+        return vector_service
+    elif name == "memory_service":
+        from .memory_service import memory_service
+        return memory_service
+    elif name == "events_service":
+        from .events_service import events_service
+        return events_service
+    elif name == "files_service":
+        from .files_service import files_service
+        return files_service
+    elif name == "tables_service":
+        from .tables_service import tables_service
+        return tables_service
+    elif name == "CloudAPIClient":
+        from .cloud_client import CloudAPIClient
+        return CloudAPIClient
+    raise AttributeError(f"module '{__name__}' has no attribute '{name__}'")

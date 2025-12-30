@@ -23,9 +23,12 @@ from routers import (
     files_router,
     events_router,
     change_detection_router,
-    sync_state_router
+    sync_state_router,
+    cloud_sync_router
 )
 from routers.schema_diff import router as schema_diff_router
+from routers.export import router as export_router
+from routers.sync_orchestrator import router as sync_orchestrator_router
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -223,6 +226,25 @@ app.include_router(
     sync_state_router,
     prefix="/v1/projects/{project_id}/sync",
     tags=["Sync State"]
+)
+
+# Cloud Sync router (cloud API integration)
+app.include_router(
+    cloud_sync_router,
+    prefix="/v1/projects",
+    tags=["Cloud Sync"]
+)
+
+# Export router (project-level export bundle creation)
+app.include_router(
+    export_router,
+    tags=["Export"]
+)
+
+# Sync Orchestrator router (core sync coordination)
+app.include_router(
+    sync_orchestrator_router,
+    tags=["Sync Orchestrator"]
 )
 
 

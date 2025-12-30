@@ -10,6 +10,7 @@ from .files import router as files_router
 from .events import router as events_router
 from .change_detection import router as change_detection_router
 from .sync_state import router as sync_state_router
+from .cloud_sync import router as cloud_sync_router
 
 __all__ = [
     "projects_router",
@@ -20,4 +21,5 @@ __all__ = [
     "events_router",
     "change_detection_router",
     "sync_state_router",
+    "cloud_sync_router",
 ]
