@@ -29,6 +29,9 @@ from routers import (
 from routers.schema_diff import router as schema_diff_router
 from routers.export import router as export_router
 from routers.sync_orchestrator import router as sync_orchestrator_router
+from routers.conflict_resolution import router as conflict_resolution_router
+from routers.pull_sync import router as pull_sync_router
+from routers.sync_history import router as sync_history_router
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -245,6 +248,18 @@ app.include_router(
 app.include_router(
     sync_orchestrator_router,
     tags=["Sync Orchestrator"]
+)
+
+# Conflict Resolution router (nested under project sync)
+app.include_router(
+    conflict_resolution_router,
+    tags=["Conflict Resolution"]
+)
+
+# Pull Sync router (cloud to local sync)
+app.include_router(
+    pull_sync_router,
+    tags=["Pull Sync"]
 )
 
 

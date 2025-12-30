@@ -39,8 +39,8 @@ class ConflictLog(Base):
     detected_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
-    # Optional metadata
-    metadata = Column(JSONB, default={})
+    # Optional metadata (renamed to avoid SQLAlchemy conflict)
+    conflict_metadata = Column(JSONB, default={})
     notes = Column(Text)
 
     def __repr__(self):
@@ -63,6 +63,6 @@ class ConflictLog(Base):
             "chosen_version": self.chosen_version,
             "detected_at": self.detected_at.isoformat() if self.detected_at else None,
             "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
-            "metadata": self.metadata,
+            "conflict_metadata": self.conflict_metadata,
             "notes": self.notes
         }
