@@ -3,6 +3,7 @@ Sync Executor - Executes sync plans with progress tracking and rollback support
 """
 from typing import Dict, List, Any, Optional, Callable
 import requests
+import time
 from rich.progress import Progress, TaskID
 from rich.console import Console
 
@@ -88,8 +89,36 @@ class SyncExecutor:
             response.raise_for_status()
 
             result = response.json()
+            sync_id = result.get('sync_id')
 
-            # Show progress based on API response
+            # Store sync_id for potential rollback
+            self.last_sync_id = sync_id
+
+            # If sync_id is returned and not in dry_run, poll for status
+            if sync_id and not dry_run:
+                console.print(f"[cyan]Sync started with ID: {sync_id}[/cyan]")
+                console.print("[cyan]Polling for status updates...[/cyan]")
+
+                with Progress() as progress:
+                    task = progress.add_task(
+                        "[cyan]Syncing...",
+                        total=100
+                    )
+
+                    # Poll until complete
+                    final_status = self._poll_sync_status(
+                        project_id,
+                        sync_id,
+                        progress,
+                        task
+                    )
+
+                    # Update result with any final status info if available
+                    if final_status and final_status.get("state") != "interrupted":
+                        # Keep the original result but note polling completed
+                        console.print("[green]Status polling completed[/green]")
+
+            # Show summary based on API response
             total_steps = result.get('total_steps', 0)
             successful = result.get('successful_steps', 0)
             failed = result.get('failed_steps', 0)
@@ -97,9 +126,6 @@ class SyncExecutor:
             if progress_callback and total_steps > 0:
                 for i in range(successful):
                     progress_callback(f"Step {i+1}/{total_steps}", i+1, total_steps)
-
-            # Store sync_id for potential rollback
-            self.last_sync_id = result.get('sync_id')
 
             # Transform API response to CLI format
             return {
@@ -166,6 +192,72 @@ class SyncExecutor:
                 except:
                     pass
             raise SyncExecutionError(error_msg)
+
+    def _poll_sync_status(
+        self,
+        project_id: str,
+        sync_id: str,
+        progress: Progress,
+        task_id: TaskID
+    ) -> Dict[str, Any]:
+        """
+        Poll sync status until complete
+
+        Args:
+            project_id: Project UUID
+            sync_id: Sync operation UUID
+            progress: Rich progress bar instance
+            task_id: Progress task ID
+
+        Returns:
+            Final sync status
+        """
+        poll_interval = 2  # Poll every 2 seconds
+        last_percentage = 0
+
+        while True:
+            try:
+                headers = {}
+                if self.cloud_api_key:
+                    headers['Authorization'] = f'Bearer {self.cloud_api_key}'
+
+                response = requests.get(
+                    f"{self.local_api_url}/v1/projects/{project_id}/sync/status",
+                    headers=headers,
+                    timeout=10
+                )
+                response.raise_for_status()
+                status = response.json()
+
+                # Calculate progress based on available data
+                # Since the general status endpoint may not have detailed progress,
+                # we'll use a simple completed/total calculation
+                if status.get("sync_in_progress"):
+                    # Sync still running - update progress incrementally
+                    last_percentage = min(last_percentage + 5, 95)  # Cap at 95% until complete
+                    progress.update(
+                        task_id,
+                        completed=last_percentage,
+                        description=f"[cyan]Syncing... ({last_percentage}%)[/cyan]"
+                    )
+                else:
+                    # Sync completed
+                    progress.update(
+                        task_id,
+                        completed=100,
+                        description="[green]Sync complete[/green]"
+                    )
+                    return status
+
+                time.sleep(poll_interval)
+
+            except requests.exceptions.RequestException as e:
+                console.print(f"[yellow]Warning: Status polling failed: {str(e)}[/yellow]")
+                # Continue without status updates - don't fail the sync
+                time.sleep(poll_interval)
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Polling interrupted by user[/yellow]")
+                return {"state": "interrupted"}
 
     def rollback(self, sync_id: Optional[str] = None, project_id: Optional[str] = None):
         """
