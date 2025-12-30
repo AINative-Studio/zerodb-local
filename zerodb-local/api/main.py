@@ -262,6 +262,12 @@ app.include_router(
     tags=["Pull Sync"]
 )
 
+# Sync History router (audit logging and history tracking)
+app.include_router(
+    sync_history_router,
+    tags=["Sync History"]
+)
+
 
 if __name__ == "__main__":
     import uvicorn
