@@ -32,6 +32,8 @@ from schemas.sync_orchestrator import (
 from services.sync_state_service import SyncStateService
 from services.cdc_service import CDCService
 from services.schema_diff_service import SchemaDiffService
+from services.sync_history_service import SyncHistoryService
+from services.pull_sync_service import PullSyncService
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +55,9 @@ class SyncOrchestrator:
         db: Session,
         sync_state_service: Optional[SyncStateService] = None,
         cdc_service: Optional[CDCService] = None,
-        schema_diff_service: Optional[SchemaDiffService] = None
+        schema_diff_service: Optional[SchemaDiffService] = None,
+        sync_history_service: Optional[SyncHistoryService] = None,
+        pull_sync_service: Optional[PullSyncService] = None
     ):
         """
         Initialize sync orchestrator
@@ -63,11 +67,15 @@ class SyncOrchestrator:
             sync_state_service: Service for sync state management
             cdc_service: Service for change data capture
             schema_diff_service: Service for schema comparison
+            sync_history_service: Service for sync history tracking
+            pull_sync_service: Service for pull sync operations
         """
         self.db = db
         self.sync_state_service = sync_state_service or SyncStateService(db)
         self.cdc_service = cdc_service or CDCService()
         self.schema_diff_service = schema_diff_service or SchemaDiffService()
+        self.sync_history_service = sync_history_service or SyncHistoryService(db)
+        self.pull_sync_service = pull_sync_service or PullSyncService(db)
 
     async def plan_sync(
         self,
@@ -205,10 +213,33 @@ class SyncOrchestrator:
         started_at = datetime.utcnow()
         snapshot_id = await self._create_snapshot(project_id)
 
+        # Create sync history entry
+        from schemas.sync_history import SyncDirection as HistoryDirection, SyncMode
+        history_direction = {
+            SyncDirection.PUSH: HistoryDirection.PUSH,
+            SyncDirection.PULL: HistoryDirection.PULL
+        }.get(sync_plan.direction, HistoryDirection.PUSH)
+
+        history_entry = self.sync_history_service.create_history_entry(
+            project_id=project_id,
+            sync_id=sync_id,
+            direction=history_direction,
+            mode=SyncMode.INCREMENTAL,  # Can be enhanced based on sync_plan
+            snapshot_id=snapshot_id
+        )
+
+        # Update status to running
+        from schemas.sync_history import SyncStatus as HistoryStatus
+        self.sync_history_service.update_history(
+            sync_id=sync_id,
+            status=HistoryStatus.RUNNING
+        )
+
         step_results: List[SyncStepResult] = []
         total_records_synced = 0
         total_bytes_transferred = 0
         errors: List[str] = []
+        records_by_entity: Dict[str, int] = {}
 
         try:
             # Execute each step in order
@@ -228,6 +259,16 @@ class SyncOrchestrator:
                     # Rollback on failure
                     logger.error(f"Step {step.step_number} failed, initiating rollback")
                     await self._rollback_to_snapshot(project_id, snapshot_id)
+
+                    # Update sync history with failure
+                    self.sync_history_service.update_history(
+                        sync_id=sync_id,
+                        status=HistoryStatus.ROLLED_BACK,
+                        completed_at=datetime.utcnow(),
+                        records_synced=records_by_entity,
+                        bytes_transferred=total_bytes_transferred,
+                        error_message=step_result.error_message
+                    )
 
                     return SyncResult(
                         sync_id=sync_id,
@@ -254,6 +295,15 @@ class SyncOrchestrator:
             # All steps succeeded
             completed_at = datetime.utcnow()
             duration = (completed_at - started_at).total_seconds()
+
+            # Update sync history with success
+            self.sync_history_service.update_history(
+                sync_id=sync_id,
+                status=HistoryStatus.COMPLETED,
+                completed_at=completed_at,
+                records_synced=records_by_entity,
+                bytes_transferred=total_bytes_transferred
+            )
 
             result = SyncResult(
                 sync_id=sync_id,
@@ -288,6 +338,17 @@ class SyncOrchestrator:
 
             # Rollback on exception
             await self._rollback_to_snapshot(project_id, snapshot_id)
+
+            # Update sync history with exception failure
+            self.sync_history_service.update_history(
+                sync_id=sync_id,
+                status=HistoryStatus.FAILED,
+                completed_at=datetime.utcnow(),
+                records_synced=records_by_entity,
+                bytes_transferred=total_bytes_transferred,
+                error_message=str(e),
+                error_stack=str(e.__traceback__) if hasattr(e, '__traceback__') else None
+            )
 
             return SyncResult(
                 sync_id=sync_id,
