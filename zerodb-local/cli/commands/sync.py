@@ -32,62 +32,118 @@ console = Console()
 
 @app.command("plan")
 def sync_plan(
-    schema: bool = typer.Option(False, "--schema", help="Show schema diff only"),
-    data: bool = typer.Option(False, "--data", help="Show data diff only"),
-    vectors: bool = typer.Option(False, "--vectors", help="Show vector diff only"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-    direction: str = typer.Option("push", "--direction", "-d", help="Sync direction: push, pull, bidirectional")
+    direction: str = typer.Option("bidirectional", "--direction", "-d", help="Sync direction: push, pull, bidirectional"),
+    entity_types: Optional[str] = typer.Option(None, "--entity-types", help="Comma-separated entity types (vectors,tables,files,events,memory)"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without connecting to cloud"),
 ):
     """
-    Generate and display sync plan showing differences
+    Generate and display sync plan showing differences between local and cloud
 
-    Story 3.5: Sync Plan Command
+    Story #421: Sync Plan Command
+
+    Shows what would be synced including:
+    - Summary statistics by entity type
+    - Estimated data size and time
+    - Conflicts and schema changes
+    - Detailed entity breakdown
 
     Examples:
         zerodb sync plan
-        zerodb sync plan --schema
-        zerodb sync plan --vectors --json
+        zerodb sync plan --direction push
+        zerodb sync plan --direction pull
+        zerodb sync plan --entity-types vectors,tables
+        zerodb sync plan --format json
+        zerodb sync plan --dry-run
     """
     try:
+        # Validate direction
+        valid_directions = ['push', 'pull', 'bidirectional']
+        if direction not in valid_directions:
+            console.print(f"[red]Error:[/red] Invalid direction '{direction}'. Must be one of: {', '.join(valid_directions)}")
+            raise typer.Exit(1)
+
+        # Validate format
+        valid_formats = ['table', 'json']
+        if format not in valid_formats:
+            console.print(f"[red]Error:[/red] Invalid format '{format}'. Must be one of: {', '.join(valid_formats)}")
+            raise typer.Exit(1)
+
+        # Load configuration
         config = load_config()
         project_id = config.get('project_id')
+        cloud_api_url = config.get('cloud_api_url', 'https://api.ainative.studio')
+        local_api_url = config.get('local_api_url', 'http://localhost:8000')
 
+        # Check for project linkage
         if not project_id:
             console.print("[red]Error:[/red] No project linked. Run 'zerodb cloud link <project_id>' first.")
             raise typer.Exit(1)
 
-        # Create planner
-        planner = SyncPlanner()
+        # Check for cloud credentials (unless dry-run)
+        if not dry_run:
+            credentials = get_cloud_credentials()
+            if not credentials:
+                console.print("[red]Error:[/red] Authentication failed. Run 'zerodb cloud login' first.")
+                raise typer.Exit(1)
 
-        # Determine filters based on flags
+        # Parse entity types filter
         filters = None
-        if schema or data or vectors:
-            entities = []
-            if schema:
-                entities.append('tables')
-            if data:
-                entities.append('tables')
-            if vectors:
-                entities.append('vectors')
-            filters = {'entities': entities}
+        if entity_types:
+            entity_list = [e.strip() for e in entity_types.split(',')]
+            valid_entities = ['vectors', 'tables', 'files', 'events', 'memory']
+            invalid = [e for e in entity_list if e not in valid_entities]
+            if invalid:
+                console.print(f"[red]Error:[/red] Invalid entity types: {', '.join(invalid)}")
+                console.print(f"Valid types: {', '.join(valid_entities)}")
+                raise typer.Exit(1)
+            filters = {'entities': entity_list}
+
+        # Create planner
+        planner = SyncPlanner(local_api_url=local_api_url, cloud_api_url=cloud_api_url)
+
+        # Dry run mode - show what would be checked
+        if dry_run:
+            console.print(f"[dim]Dry run mode - preview without cloud connection[/dim]\n")
+            console.print(f"[cyan]Would check sync plan for:[/cyan]")
+            console.print(f"  Project ID: {project_id}")
+            console.print(f"  Direction: {direction}")
+            console.print(f"  Local API: {local_api_url}")
+            console.print(f"  Cloud API: {cloud_api_url}")
+            if filters:
+                console.print(f"  Entity types: {', '.join(filters['entities'])}")
+            console.print("\n[yellow]Note:[/yellow] Use without --dry-run to generate actual sync plan")
+            return
 
         # Generate plan
-        console.print(f"[cyan]Generating sync plan for project {project_id}...[/cyan]")
-        plan = planner.generate_plan(
-            project_id=project_id,
-            direction=direction,
-            mode='incremental',
-            filters=filters
-        )
+        entity_filter_str = f" ({', '.join(filters['entities'])})" if filters else ""
+        console.print(f"[cyan]Generating sync plan for project {project_id}{entity_filter_str}...[/cyan]")
 
-        # Output
-        if json_output:
+        try:
+            plan = planner.generate_plan(
+                project_id=project_id,
+                direction=direction,
+                mode='incremental',
+                filters=filters
+            )
+        except ConnectionError as e:
+            console.print(f"[red]Error:[/red] Cannot connect to cloud. Check CLOUD_API_URL: {cloud_api_url}")
+            console.print(f"Details: {str(e)}")
+            raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to generate sync plan: {str(e)}")
+            raise typer.Exit(1)
+
+        # Output based on format
+        if format == 'json':
             console.print(planner.plan_to_json(plan))
         else:
-            _display_plan(plan)
+            _display_plan_enhanced(plan, direction)
 
+    except typer.Exit:
+        raise
     except Exception as e:
-        console.print(f"[red]Error:[/red] {str(e)}")
+        console.print(f"[red]Unexpected error:[/red] {str(e)}")
         raise typer.Exit(1)
 
 
@@ -350,6 +406,172 @@ def _display_plan(plan: SyncPlan):
 
     if plan.has_conflicts:
         console.print(f"[yellow]Conflicts:[/yellow] {len(plan.conflicts)}")
+
+
+def _display_plan_enhanced(plan: SyncPlan, direction: str):
+    """
+    Display sync plan with enhanced formatting and detailed statistics
+
+    Shows:
+    - Summary table with entity types and operations
+    - Estimated data size
+    - Conflicts and schema changes
+    - Detailed breakdown by entity type
+    """
+    console.print(f"\n[bold cyan]Sync Plan[/bold cyan]")
+    console.print(f"[dim]Direction: {direction.upper()} | Mode: {plan.mode} | Created: {plan.created_at[:19]}[/dim]\n")
+
+    # Calculate statistics by entity type
+    entity_stats = {}
+    for op in plan.operations:
+        if op.entity_type not in entity_stats:
+            entity_stats[op.entity_type] = {
+                'count': 0,
+                'operations': [],
+                'estimated_size': 0
+            }
+        entity_stats[op.entity_type]['count'] += 1
+        entity_stats[op.entity_type]['operations'].append(op.operation)
+
+        # Estimate size (placeholder - real implementation would calculate actual sizes)
+        if op.entity_type == 'vectors':
+            entity_stats[op.entity_type]['estimated_size'] += 4096  # ~4KB per vector
+        elif op.entity_type == 'tables':
+            entity_stats[op.entity_type]['estimated_size'] += 1024  # ~1KB per row estimate
+        elif op.entity_type == 'files':
+            entity_stats[op.entity_type]['estimated_size'] += 8192  # ~8KB per file estimate
+
+    # Main summary table
+    if entity_stats:
+        table = Table(
+            title="Sync Plan Summary",
+            show_header=True,
+            header_style="bold cyan",
+            border_style="cyan"
+        )
+        table.add_column("Entity Type", style="cyan", no_wrap=True)
+        table.add_column("Operation", style="yellow", no_wrap=True)
+        table.add_column("Count", justify="right", style="magenta")
+        table.add_column("Est. Size", justify="right", style="green")
+
+        for entity_type, stats in sorted(entity_stats.items()):
+            # Determine primary operation
+            ops_count = {}
+            for op in stats['operations']:
+                ops_count[op] = ops_count.get(op, 0) + 1
+            primary_op = max(ops_count.items(), key=lambda x: x[1])[0].title()
+
+            # Format size
+            size_bytes = stats['estimated_size']
+            if size_bytes < 1024:
+                size_str = f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                size_str = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+            # Format count
+            count_str = f"{stats['count']:,}"
+            if entity_type == 'tables':
+                count_str = f"{stats['count']} table{'s' if stats['count'] != 1 else ''}"
+            elif entity_type == 'files':
+                count_str = f"{stats['count']} file{'s' if stats['count'] != 1 else ''}"
+
+            table.add_row(
+                entity_type.title(),
+                primary_op,
+                count_str,
+                size_str
+            )
+
+        console.print(table)
+    else:
+        console.print("[green]No changes to sync. Everything is up to date.[/green]")
+        return
+
+    # Totals
+    total_size = sum(s['estimated_size'] for s in entity_stats.values())
+    if total_size < 1024:
+        total_size_str = f"{total_size} B"
+    elif total_size < 1024 * 1024:
+        total_size_str = f"{total_size / 1024:.1f} KB"
+    else:
+        total_size_str = f"{total_size / (1024 * 1024):.1f} MB"
+
+    console.print(f"\n[bold]Total Operations:[/bold] {plan.total_operations:,}")
+    console.print(f"[bold]Total Estimated Size:[/bold] {total_size_str}")
+
+    # Estimate time (rough calculation: ~100KB/sec for network transfer)
+    if total_size > 0:
+        estimated_seconds = max(1, int(total_size / 102400))  # 100KB/s
+        if estimated_seconds < 60:
+            time_str = f"{estimated_seconds} second{'s' if estimated_seconds != 1 else ''}"
+        else:
+            minutes = estimated_seconds // 60
+            time_str = f"{minutes} minute{'s' if minutes != 1 else ''}"
+        console.print(f"[bold]Estimated Time:[/bold] {time_str}")
+
+    # Conflicts section
+    if plan.has_conflicts:
+        console.print(f"\n[yellow]⚠️  Conflicts Detected: {len(plan.conflicts)}[/yellow]")
+
+        conflicts_table = Table(show_header=True, header_style="bold yellow", border_style="yellow")
+        conflicts_table.add_column("Entity Type", style="cyan")
+        conflicts_table.add_column("Entity ID", style="dim")
+        conflicts_table.add_column("Issue", style="yellow")
+
+        for conflict in plan.conflicts[:5]:  # Show first 5 conflicts
+            conflicts_table.add_row(
+                conflict.get('entity_type', 'unknown'),
+                conflict.get('entity_id', 'N/A')[:20],
+                "Modified in both local and cloud"
+            )
+
+        console.print(conflicts_table)
+
+        if len(plan.conflicts) > 5:
+            console.print(f"[dim]... and {len(plan.conflicts) - 5} more conflicts[/dim]")
+
+        console.print("\n[yellow]Run 'zerodb sync apply' to resolve conflicts interactively[/yellow]")
+
+    # Breaking changes warning
+    schema_changes = [op for op in plan.operations if op.entity_type == 'tables' and op.operation in ['delete', 'update']]
+    if schema_changes:
+        console.print(f"\n[red]⚠️  Potential Schema Changes: {len(schema_changes)}[/red]")
+        console.print("[dim]Review table modifications carefully before applying[/dim]")
+
+    # Detailed breakdown
+    console.print(f"\n[bold]Detailed Breakdown:[/bold]")
+    for entity_type in sorted(entity_stats.keys()):
+        ops = plan.get_by_entity_type(entity_type)
+        console.print(f"\n[cyan]{entity_type.title()}:[/cyan] {len(ops)} operation{'s' if len(ops) != 1 else ''}")
+
+        # Group by operation type
+        op_groups = {}
+        for op in ops:
+            if op.operation not in op_groups:
+                op_groups[op.operation] = []
+            op_groups[op.operation].append(op)
+
+        for op_type, op_list in sorted(op_groups.items()):
+            icon = "+" if op_type == "create" else "~" if op_type == "update" else "-" if op_type == "delete" else "↑"
+            color = "green" if op_type == "create" else "yellow" if op_type == "update" else "red" if op_type == "delete" else "cyan"
+
+            console.print(f"  [{color}]{icon} {op_type.title()}[/{color}]: {len(op_list)} item{'s' if len(op_list) != 1 else ''}")
+
+            # Show sample items
+            for op in op_list[:3]:
+                name = op.entity_name or op.entity_id or 'unnamed'
+                desc = op.description or f"{op.entity_type} {op.operation}"
+                console.print(f"    [{color}]•[/{color}] [dim]{name[:50]}[/dim]")
+
+            if len(op_list) > 3:
+                console.print(f"    [dim]... and {len(op_list) - 3} more[/dim]")
+
+    console.print(f"\n[bold]Next Steps:[/bold]")
+    console.print("  1. Review the sync plan above")
+    console.print("  2. Run 'zerodb sync apply' to execute the sync")
+    console.print("  3. Use 'zerodb sync apply --dry-run' to preview without changes")
 
 
 def _display_results(result: dict, dry_run: bool = False):

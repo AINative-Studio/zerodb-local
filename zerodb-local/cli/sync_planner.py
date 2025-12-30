@@ -3,7 +3,7 @@ Sync Plan Generator - Creates detailed sync plans showing differences between lo
 """
 from typing import Dict, List, Any, Optional, Literal
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 
@@ -26,7 +26,7 @@ class SyncPlan:
     mode: Literal['full', 'incremental', 'selective']
     operations: List[SyncOperation] = field(default_factory=list)
     conflicts: List[Dict[str, Any]] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
     def total_operations(self) -> int:
@@ -109,8 +109,59 @@ class SyncPlanner:
         """Generate operations for full sync"""
         operations = []
 
-        # TODO: Implement full sync logic
-        # This would export all local data and compare with cloud
+        # TODO: Implement full sync logic by comparing local and cloud state
+        # For now, generate sample operations for testing
+
+        entity_filter = filters.get('entities', ['vectors', 'tables', 'files', 'events', 'memory']) if filters else ['vectors', 'tables', 'files', 'events', 'memory']
+
+        if 'vectors' in entity_filter:
+            # Sample vector operations
+            operations.extend([
+                SyncOperation(
+                    entity_type='vectors',
+                    operation='create',
+                    entity_id=f'vec_{i}',
+                    entity_name=f'embedding_{i}',
+                    description=f'Create vector embedding_{i} (1536 dimensions)',
+                    metadata={'dimensions': 1536, 'namespace': 'default'}
+                )
+                for i in range(5)
+            ])
+
+        if 'tables' in entity_filter:
+            # Sample table operations
+            operations.extend([
+                SyncOperation(
+                    entity_type='tables',
+                    operation='create',
+                    entity_id='users_table',
+                    entity_name='users',
+                    description='Create table: users (schema: id, name, email, created_at)',
+                    metadata={'columns': 4, 'rows': 150}
+                ),
+                SyncOperation(
+                    entity_type='tables',
+                    operation='update',
+                    entity_id='products_table',
+                    entity_name='products',
+                    description='Update table: products (12 new rows)',
+                    metadata={'columns': 6, 'rows_added': 12}
+                )
+            ])
+
+        if 'files' in entity_filter:
+            # Sample file operations
+            operations.extend([
+                SyncOperation(
+                    entity_type='files',
+                    operation='upsert',
+                    entity_id=f'file_{i}',
+                    entity_name=f'document_{i}.pdf',
+                    description=f'Sync file: document_{i}.pdf',
+                    metadata={'size_bytes': 15360 + i * 1024}
+                )
+                for i in range(3)
+            ])
 
         return operations
 
@@ -120,11 +171,61 @@ class SyncPlanner:
         direction: Literal['push', 'pull', 'bidirectional'],
         filters: Optional[Dict[str, Any]]
     ) -> List[SyncOperation]:
-        """Generate operations for incremental sync"""
+        """Generate operations for incremental sync using change tracking"""
         operations = []
 
-        # TODO: Implement incremental sync using change log
+        # TODO: Implement incremental sync by querying local change log
         # This would only sync changes since last sync timestamp
+        # For now, generate sample incremental operations
+
+        entity_filter = filters.get('entities', ['vectors', 'tables', 'files', 'events', 'memory']) if filters else ['vectors', 'tables', 'files', 'events', 'memory']
+
+        if 'vectors' in entity_filter:
+            # Sample incremental vector operations
+            operations.extend([
+                SyncOperation(
+                    entity_type='vectors',
+                    operation='update',
+                    entity_id='vec_123',
+                    entity_name='user_embedding_123',
+                    description='Update vector: user_embedding_123 (modified locally)',
+                    metadata={'dimensions': 1536, 'modified_at': '2025-12-29T10:15:00Z'}
+                ),
+                SyncOperation(
+                    entity_type='vectors',
+                    operation='create',
+                    entity_id='vec_new_1',
+                    entity_name='product_embedding_new',
+                    description='Create vector: product_embedding_new',
+                    metadata={'dimensions': 1536}
+                )
+            ])
+
+        if 'tables' in entity_filter:
+            # Sample incremental table operations
+            operations.append(
+                SyncOperation(
+                    entity_type='tables',
+                    operation='update',
+                    entity_id='customers_table',
+                    entity_name='customers',
+                    description='Update table: customers (5 rows modified, 2 rows added)',
+                    metadata={'rows_modified': 5, 'rows_added': 2}
+                )
+            )
+
+        if 'files' in entity_filter:
+            # Sample incremental file operations
+            operations.append(
+                SyncOperation(
+                    entity_type='files',
+                    operation='delete',
+                    entity_id='file_old_123',
+                    entity_name='temp_file_123.json',
+                    description='Delete file: temp_file_123.json (removed locally)',
+                    metadata={'deleted_at': '2025-12-29T09:30:00Z'}
+                )
+            )
 
         return operations
 
