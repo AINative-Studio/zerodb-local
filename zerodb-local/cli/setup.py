@@ -31,10 +31,18 @@ setup(
         "typer>=0.9.0",
         "rich>=13.0.0",
         "requests>=2.31.0",
+        "httpx>=0.24.0",
+    ],
+    py_modules=[
+        "main",
+        "config",
+        "sync_planner",
+        "sync_executor",
+        "conflict_resolver",
     ],
     entry_points={
         "console_scripts": [
-            "zerodb=cli.main:app",
+            "zerodb=main:app",
         ],
     },
 )
