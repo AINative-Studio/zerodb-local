@@ -69,11 +69,17 @@ zerodb sync pull
 
 ### Local Environment Commands
 
-- `zerodb local init` - Initialize local environment
-- `zerodb local up` - Start all services
+- `zerodb local init` - Initialize local environment (create data directories)
+- `zerodb local up` - Start all services (docker-compose up -d)
+  - `--logs` - Show logs instead of detaching
 - `zerodb local down` - Stop all services
-- `zerodb local status` - Show service status
-- `zerodb local logs` - View service logs
+  - `--volumes` - Also remove volumes
+- `zerodb local status` - Show service status and health
+- `zerodb local logs [service]` - View service logs
+  - `--no-follow` - Don't follow logs
+- `zerodb local restart [--service NAME]` - Restart services
+- `zerodb local reset` - Reset environment (removes all data)
+  - `--yes` - Skip confirmation prompt
 
 ### Cloud Commands
 

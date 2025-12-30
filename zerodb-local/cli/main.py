@@ -4,11 +4,17 @@ ZeroDB Local CLI - Main entry point
 
 Manages local ZeroDB environment, cloud sync, and project operations.
 """
+import sys
+from pathlib import Path
+
+# Add current directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
 import typer
 from typing import Optional
 from rich.console import Console
 
-from .commands import sync, local, cloud, env, inspect
+from commands import sync, local, cloud, env, inspect
 
 app = typer.Typer(
     name="zerodb",
