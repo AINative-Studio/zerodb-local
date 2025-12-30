@@ -25,13 +25,19 @@ class MinIOService:
         self.secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
         self.default_bucket = os.getenv("MINIO_BUCKET", "zerodb-local-files")
         self.secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
+        self.testing = os.getenv("TESTING", "false").lower() == "true"
 
-        self.client = Minio(
-            self.endpoint,
-            access_key=self.access_key,
-            secret_key=self.secret_key,
-            secure=self.secure
-        )
+        if not self.testing:
+            self.client = Minio(
+                self.endpoint,
+                access_key=self.access_key,
+                secret_key=self.secret_key,
+                secure=self.secure
+            )
+        else:
+            # Mock MinIO client for testing
+            from unittest.mock import MagicMock
+            self.client = MagicMock()
 
     async def initialize_bucket(self, bucket_name: str = None) -> bool:
         """

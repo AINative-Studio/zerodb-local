@@ -28,6 +28,9 @@ except ImportError:
             self.email = "dev@localhost"
             self.organization_id = None
 
+    # Use MockUser as User for type annotations
+    User = MockUser
+
     def get_current_user_flexible():
         return lambda: MockUser()
 

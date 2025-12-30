@@ -20,15 +20,21 @@ class RedPandaService:
         """Initialize RedPanda (Kafka) client"""
         self.bootstrap_servers = os.getenv("REDPANDA_URL", "localhost:9092")
         self.default_topic = os.getenv("REDPANDA_TOPIC", "zerodb-events")
+        self.testing = os.getenv("TESTING", "false").lower() == "true"
 
         # Initialize producer (lazy - created on first publish)
         self._producer = None
 
-        # Initialize admin client
-        self.admin_client = KafkaAdminClient(
-            bootstrap_servers=self.bootstrap_servers,
-            client_id="zerodb-admin"
-        )
+        # Initialize admin client (skip in testing mode)
+        if not self.testing:
+            self.admin_client = KafkaAdminClient(
+                bootstrap_servers=self.bootstrap_servers,
+                client_id="zerodb-admin"
+            )
+        else:
+            # Mock admin client for testing
+            from unittest.mock import MagicMock
+            self.admin_client = MagicMock()
 
     def _get_producer(self) -> KafkaProducer:
         """Get or create Kafka producer"""

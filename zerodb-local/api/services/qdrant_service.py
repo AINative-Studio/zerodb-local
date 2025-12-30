@@ -26,8 +26,15 @@ class QdrantService:
     def __init__(self):
         """Initialize Qdrant client"""
         self.url = os.getenv("QDRANT_URL", "http://localhost:6333")
-        self.client = QdrantClient(url=self.url)
+        self.testing = os.getenv("TESTING", "false").lower() == "true"
         self.default_collection = "zerodb_local"
+
+        if not self.testing:
+            self.client = QdrantClient(url=self.url)
+        else:
+            # Mock Qdrant client for testing
+            from unittest.mock import MagicMock
+            self.client = MagicMock()
 
     async def initialize_collection(
         self,

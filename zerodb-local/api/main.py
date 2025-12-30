@@ -21,8 +21,11 @@ from routers import (
     memory_router,
     tables_router,
     files_router,
-    events_router
+    events_router,
+    change_detection_router,
+    sync_state_router
 )
+from routers.schema_diff import router as schema_diff_router
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -199,6 +202,27 @@ app.include_router(
     events_router,
     prefix="/v1/projects/{project_id}/database/events",
     tags=["Events"]
+)
+
+# Sync/CDC router (project-level, not database-level)
+app.include_router(
+    change_detection_router,
+    prefix="/v1/sync",
+    tags=["Sync"]
+)
+
+# Schema diff router (for schema comparison and migration planning)
+app.include_router(
+    schema_diff_router,
+    prefix="/v1/sync/schema",
+    tags=["Schema Diff"]
+)
+
+# Sync State router (project-level sync state tracking)
+app.include_router(
+    sync_state_router,
+    prefix="/v1/projects/{project_id}/sync",
+    tags=["Sync State"]
 )
 
 

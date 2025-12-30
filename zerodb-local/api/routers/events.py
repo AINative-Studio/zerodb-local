@@ -17,6 +17,9 @@ except ImportError:
     class MockUser:
         def __init__(self):
             self.id = "00000000-0000-0000-0000-000000000001"
+
+    User = MockUser
+
     def get_current_user_flexible():
         return lambda: MockUser()
 
