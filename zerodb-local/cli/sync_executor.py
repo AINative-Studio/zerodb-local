@@ -32,6 +32,7 @@ class SyncExecutor:
         self.cloud_api_url = cloud_api_url
         self.cloud_api_key = cloud_api_key
         self.executed_operations: List[SyncOperation] = []
+        self.last_sync_id: Optional[str] = None
 
     def execute_plan(
         self,
@@ -41,7 +42,7 @@ class SyncExecutor:
         progress_callback: Optional[Callable[[str, int, int], None]] = None
     ) -> Dict[str, Any]:
         """
-        Execute a sync plan
+        Execute a sync plan via API
 
         Args:
             plan: SyncPlan to execute
@@ -58,135 +59,169 @@ class SyncExecutor:
         if dry_run:
             return self._dry_run(plan)
 
-        results = {
-            'status': 'success',
-            'total_operations': plan.total_operations,
-            'successful': 0,
-            'failed': 0,
-            'errors': []
-        }
-
         try:
-            with Progress() as progress:
-                task = progress.add_task(
-                    f"[cyan]Syncing {plan.direction}...",
-                    total=plan.total_operations
-                )
+            # First, generate a plan via API to get plan_id
+            console.print("[cyan]Generating sync plan via API...[/cyan]")
+            plan_response = self._generate_api_plan(project_id, plan.direction)
+            plan_id = plan_response.get('plan_id')
 
-                for idx, operation in enumerate(plan.operations):
-                    try:
-                        # Execute the operation
-                        self._execute_operation(operation, project_id)
-                        self.executed_operations.append(operation)
-                        results['successful'] += 1
+            if not plan_id:
+                raise SyncExecutionError("Failed to generate sync plan: No plan_id returned")
 
-                        # Update progress
-                        progress.update(task, advance=1)
-                        if progress_callback:
-                            progress_callback(operation.description, idx + 1, plan.total_operations)
+            # Execute the plan via API
+            console.print(f"[cyan]Executing sync plan {plan_id}...[/cyan]")
 
-                    except Exception as e:
-                        results['failed'] += 1
-                        results['errors'].append({
-                            'operation': operation.description,
-                            'error': str(e)
-                        })
-                        console.print(f"[red]✗[/red] {operation.description}: {str(e)}")
+            headers = {}
+            if self.cloud_api_key:
+                headers['Authorization'] = f'Bearer {self.cloud_api_key}'
 
-                        # Rollback on error
-                        console.print("[yellow]Rolling back changes...[/yellow]")
-                        self.rollback()
-                        raise SyncExecutionError(f"Sync failed: {str(e)}")
+            response = requests.post(
+                f"{self.local_api_url}/v1/projects/{project_id}/sync/execute",
+                json={
+                    "plan_id": plan_id,
+                    "approved": True,
+                    "conflict_resolutions": {}
+                },
+                headers=headers,
+                timeout=300
+            )
+            response.raise_for_status()
 
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Sync interrupted by user. Rolling back...[/yellow]")
-            self.rollback()
-            results['status'] = 'cancelled'
+            result = response.json()
 
-        return results
+            # Show progress based on API response
+            total_steps = result.get('total_steps', 0)
+            successful = result.get('successful_steps', 0)
+            failed = result.get('failed_steps', 0)
 
-    def _execute_operation(self, operation: SyncOperation, project_id: str):
+            if progress_callback and total_steps > 0:
+                for i in range(successful):
+                    progress_callback(f"Step {i+1}/{total_steps}", i+1, total_steps)
+
+            # Store sync_id for potential rollback
+            self.last_sync_id = result.get('sync_id')
+
+            # Transform API response to CLI format
+            return {
+                'status': 'success' if result.get('status') == 'completed' else result.get('status', 'failed'),
+                'total_operations': result.get('records_synced', 0),
+                'successful': successful,
+                'failed': failed,
+                'errors': result.get('errors', []),
+                'sync_id': result.get('sync_id'),
+                'duration_seconds': result.get('duration_seconds'),
+                'bytes_transferred': result.get('bytes_transferred', 0)
+            }
+
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Sync execution failed: {str(e)}"
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json().get('detail', str(e))
+                    error_msg = f"Sync execution failed: {error_detail}"
+                except:
+                    pass
+            raise SyncExecutionError(error_msg)
+        except Exception as e:
+            raise SyncExecutionError(f"Unexpected error during sync: {str(e)}")
+
+    def _generate_api_plan(self, project_id: str, direction: str) -> Dict[str, Any]:
         """
-        Execute a single sync operation
+        Generate sync plan via API
 
         Args:
-            operation: SyncOperation to execute
             project_id: Project ID
+            direction: Sync direction (push/pull/bidirectional)
+
+        Returns:
+            API plan response
 
         Raises:
-            Exception: If operation fails
+            SyncExecutionError: If plan generation fails
         """
-        if operation.entity_type == 'table':
-            self._sync_table(operation, project_id)
-        elif operation.entity_type == 'vector':
-            self._sync_vector(operation, project_id)
-        elif operation.entity_type == 'file':
-            self._sync_file(operation, project_id)
-        elif operation.entity_type == 'event':
-            self._sync_event(operation, project_id)
-        elif operation.entity_type == 'memory':
-            self._sync_memory(operation, project_id)
-        else:
-            raise ValueError(f"Unknown entity type: {operation.entity_type}")
+        headers = {}
+        if self.cloud_api_key:
+            headers['Authorization'] = f'Bearer {self.cloud_api_key}'
 
-    def _sync_table(self, operation: SyncOperation, project_id: str):
-        """Sync a table operation"""
-        # TODO: Implement actual table sync
-        pass
+        try:
+            response = requests.post(
+                f"{self.local_api_url}/v1/projects/{project_id}/sync/plan",
+                json={
+                    "direction": direction,
+                    "entity_types": None,  # Sync all types
+                    "conflict_strategy": "newest_wins",
+                    "include_schema": True
+                },
+                headers=headers,
+                timeout=60
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Failed to generate sync plan: {str(e)}"
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json().get('detail', str(e))
+                    error_msg = f"Failed to generate sync plan: {error_detail}"
+                except:
+                    pass
+            raise SyncExecutionError(error_msg)
 
-    def _sync_vector(self, operation: SyncOperation, project_id: str):
-        """Sync a vector operation"""
-        # TODO: Implement actual vector sync
-        pass
-
-    def _sync_file(self, operation: SyncOperation, project_id: str):
-        """Sync a file operation"""
-        # TODO: Implement actual file sync
-        pass
-
-    def _sync_event(self, operation: SyncOperation, project_id: str):
-        """Sync an event operation"""
-        # TODO: Implement actual event sync
-        pass
-
-    def _sync_memory(self, operation: SyncOperation, project_id: str):
-        """Sync a memory operation"""
-        # TODO: Implement actual memory sync
-        pass
-
-    def rollback(self):
+    def rollback(self, sync_id: Optional[str] = None, project_id: Optional[str] = None):
         """
-        Rollback all executed operations
-
-        This reverses all operations that were successfully executed
-        before the failure.
-        """
-        if not self.executed_operations:
-            return
-
-        console.print(f"[yellow]Rolling back {len(self.executed_operations)} operations...[/yellow]")
-
-        # Reverse operations in reverse order
-        for operation in reversed(self.executed_operations):
-            try:
-                self._rollback_operation(operation)
-                console.print(f"[green]✓[/green] Rolled back: {operation.description}")
-            except Exception as e:
-                console.print(f"[red]✗[/red] Failed to rollback {operation.description}: {str(e)}")
-
-        self.executed_operations.clear()
-        console.print("[yellow]Rollback complete[/yellow]")
-
-    def _rollback_operation(self, operation: SyncOperation):
-        """
-        Rollback a single operation
+        Rollback sync via API
 
         Args:
-            operation: Operation to rollback
+            sync_id: Sync ID to rollback (uses last sync if not provided)
+            project_id: Project ID (required)
+
+        Raises:
+            SyncExecutionError: If rollback fails
         """
-        # TODO: Implement actual rollback logic
-        # This would reverse the operation (e.g., delete → create, create → delete)
-        pass
+        # Use provided sync_id or last executed sync
+        rollback_sync_id = sync_id or getattr(self, 'last_sync_id', None)
+
+        if not rollback_sync_id:
+            console.print("[yellow]No sync to rollback[/yellow]")
+            return
+
+        if not project_id:
+            raise SyncExecutionError("project_id required for rollback")
+
+        try:
+            console.print(f"[yellow]Rolling back sync {rollback_sync_id}...[/yellow]")
+
+            headers = {}
+            if self.cloud_api_key:
+                headers['Authorization'] = f'Bearer {self.cloud_api_key}'
+
+            response = requests.post(
+                f"{self.local_api_url}/v1/projects/{project_id}/sync/rollback/{rollback_sync_id}",
+                headers=headers,
+                timeout=300
+            )
+            response.raise_for_status()
+
+            result = response.json()
+
+            if result.get('success'):
+                console.print(f"[green]✓[/green] Rollback successful")
+                console.print(f"[green]Restored snapshot: {result.get('snapshot_id')}[/green]")
+            else:
+                errors = result.get('errors', [])
+                console.print(f"[red]✗[/red] Rollback failed: {', '.join(errors)}")
+                raise SyncExecutionError(f"Rollback failed: {', '.join(errors)}")
+
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Rollback failed: {str(e)}"
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json().get('detail', str(e))
+                    error_msg = f"Rollback failed: {error_detail}"
+                except:
+                    pass
+            console.print(f"[red]{error_msg}[/red]")
+            raise SyncExecutionError(error_msg)
 
     def _dry_run(self, plan: SyncPlan) -> Dict[str, Any]:
         """

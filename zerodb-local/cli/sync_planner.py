@@ -5,6 +5,8 @@ from typing import Dict, List, Any, Optional, Literal
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import requests
+from requests.exceptions import RequestException
 
 
 @dataclass
@@ -58,12 +60,23 @@ class SyncPlan:
         return [op for op in self.operations if op.entity_type == entity_type]
 
 
+class SyncPlannerError(Exception):
+    """Exception raised when sync planning fails"""
+    pass
+
+
 class SyncPlanner:
     """Generates sync plans by comparing local and cloud state"""
 
-    def __init__(self, local_api_url: str = "http://localhost:8000", cloud_api_url: str = "https://api.ainative.studio"):
+    def __init__(
+        self,
+        local_api_url: str = "http://localhost:8000",
+        cloud_api_url: str = "https://api.ainative.studio",
+        api_key: Optional[str] = None
+    ):
         self.local_api_url = local_api_url
         self.cloud_api_url = cloud_api_url
+        self.api_key = api_key
 
     def generate_plan(
         self,
@@ -106,64 +119,64 @@ class SyncPlanner:
         direction: Literal['push', 'pull', 'bidirectional'],
         filters: Optional[Dict[str, Any]]
     ) -> List[SyncOperation]:
-        """Generate operations for full sync"""
-        operations = []
+        """Generate operations for full sync by calling API"""
+        try:
+            # Prepare request payload
+            entity_types = filters.get('entities', ['vectors', 'tables', 'files', 'events', 'memory']) if filters else None
 
-        # TODO: Implement full sync logic by comparing local and cloud state
-        # For now, generate sample operations for testing
+            request_payload = {
+                "direction": direction,
+                "entity_types": entity_types,
+                "conflict_strategy": filters.get('conflict_strategy', 'newest_wins') if filters else 'newest_wins',
+                "include_schema": filters.get('include_schema', True) if filters else True
+            }
 
-        entity_filter = filters.get('entities', ['vectors', 'tables', 'files', 'events', 'memory']) if filters else ['vectors', 'tables', 'files', 'events', 'memory']
+            # Set up headers
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            headers["Content-Type"] = "application/json"
 
-        if 'vectors' in entity_filter:
-            # Sample vector operations
-            operations.extend([
-                SyncOperation(
-                    entity_type='vectors',
-                    operation='create',
-                    entity_id=f'vec_{i}',
-                    entity_name=f'embedding_{i}',
-                    description=f'Create vector embedding_{i} (1536 dimensions)',
-                    metadata={'dimensions': 1536, 'namespace': 'default'}
+            # Call API endpoint
+            url = f"{self.local_api_url}/v1/projects/{project_id}/sync/plan"
+            response = requests.post(
+                url,
+                json=request_payload,
+                headers=headers,
+                timeout=30
+            )
+            response.raise_for_status()
+
+            # Parse API response
+            plan_data = response.json()
+
+            # Convert API steps to SyncOperation objects
+            operations = []
+            for step in plan_data.get("steps", []):
+                operations.append(
+                    SyncOperation(
+                        entity_type=step.get("entity_type", "unknown"),
+                        operation=step.get("operation", "update"),
+                        entity_id=step.get("step_type"),
+                        entity_name=step.get("description", ""),
+                        description=step.get("description", ""),
+                        metadata={
+                            "step_number": step.get("step_number"),
+                            "step_type": step.get("step_type"),
+                            "data_count": step.get("data_count", 0),
+                            "estimated_duration": step.get("estimated_duration_seconds")
+                        }
+                    )
                 )
-                for i in range(5)
-            ])
 
-        if 'tables' in entity_filter:
-            # Sample table operations
-            operations.extend([
-                SyncOperation(
-                    entity_type='tables',
-                    operation='create',
-                    entity_id='users_table',
-                    entity_name='users',
-                    description='Create table: users (schema: id, name, email, created_at)',
-                    metadata={'columns': 4, 'rows': 150}
-                ),
-                SyncOperation(
-                    entity_type='tables',
-                    operation='update',
-                    entity_id='products_table',
-                    entity_name='products',
-                    description='Update table: products (12 new rows)',
-                    metadata={'columns': 6, 'rows_added': 12}
-                )
-            ])
+            return operations
 
-        if 'files' in entity_filter:
-            # Sample file operations
-            operations.extend([
-                SyncOperation(
-                    entity_type='files',
-                    operation='upsert',
-                    entity_id=f'file_{i}',
-                    entity_name=f'document_{i}.pdf',
-                    description=f'Sync file: document_{i}.pdf',
-                    metadata={'size_bytes': 15360 + i * 1024}
-                )
-                for i in range(3)
-            ])
-
-        return operations
+        except RequestException as e:
+            raise SyncPlannerError(f"Failed to generate sync plan: API request failed - {str(e)}")
+        except KeyError as e:
+            raise SyncPlannerError(f"Failed to parse sync plan response: Missing field {str(e)}")
+        except Exception as e:
+            raise SyncPlannerError(f"Failed to generate sync plan: {str(e)}")
 
     def _generate_incremental_sync_operations(
         self,
@@ -171,63 +184,64 @@ class SyncPlanner:
         direction: Literal['push', 'pull', 'bidirectional'],
         filters: Optional[Dict[str, Any]]
     ) -> List[SyncOperation]:
-        """Generate operations for incremental sync using change tracking"""
-        operations = []
+        """Generate operations for incremental sync by calling API"""
+        try:
+            # Prepare request payload (same as full sync, API determines incremental vs full)
+            entity_types = filters.get('entities', ['vectors', 'tables', 'files', 'events', 'memory']) if filters else None
 
-        # TODO: Implement incremental sync by querying local change log
-        # This would only sync changes since last sync timestamp
-        # For now, generate sample incremental operations
+            request_payload = {
+                "direction": direction,
+                "entity_types": entity_types,
+                "conflict_strategy": filters.get('conflict_strategy', 'newest_wins') if filters else 'newest_wins',
+                "include_schema": filters.get('include_schema', False) if filters else False
+            }
 
-        entity_filter = filters.get('entities', ['vectors', 'tables', 'files', 'events', 'memory']) if filters else ['vectors', 'tables', 'files', 'events', 'memory']
+            # Set up headers
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            headers["Content-Type"] = "application/json"
 
-        if 'vectors' in entity_filter:
-            # Sample incremental vector operations
-            operations.extend([
-                SyncOperation(
-                    entity_type='vectors',
-                    operation='update',
-                    entity_id='vec_123',
-                    entity_name='user_embedding_123',
-                    description='Update vector: user_embedding_123 (modified locally)',
-                    metadata={'dimensions': 1536, 'modified_at': '2025-12-29T10:15:00Z'}
-                ),
-                SyncOperation(
-                    entity_type='vectors',
-                    operation='create',
-                    entity_id='vec_new_1',
-                    entity_name='product_embedding_new',
-                    description='Create vector: product_embedding_new',
-                    metadata={'dimensions': 1536}
-                )
-            ])
-
-        if 'tables' in entity_filter:
-            # Sample incremental table operations
-            operations.append(
-                SyncOperation(
-                    entity_type='tables',
-                    operation='update',
-                    entity_id='customers_table',
-                    entity_name='customers',
-                    description='Update table: customers (5 rows modified, 2 rows added)',
-                    metadata={'rows_modified': 5, 'rows_added': 2}
-                )
+            # Call API endpoint
+            url = f"{self.local_api_url}/v1/projects/{project_id}/sync/plan"
+            response = requests.post(
+                url,
+                json=request_payload,
+                headers=headers,
+                timeout=30
             )
+            response.raise_for_status()
 
-        if 'files' in entity_filter:
-            # Sample incremental file operations
-            operations.append(
-                SyncOperation(
-                    entity_type='files',
-                    operation='delete',
-                    entity_id='file_old_123',
-                    entity_name='temp_file_123.json',
-                    description='Delete file: temp_file_123.json (removed locally)',
-                    metadata={'deleted_at': '2025-12-29T09:30:00Z'}
+            # Parse API response
+            plan_data = response.json()
+
+            # Convert API steps to SyncOperation objects
+            operations = []
+            for step in plan_data.get("steps", []):
+                operations.append(
+                    SyncOperation(
+                        entity_type=step.get("entity_type", "unknown"),
+                        operation=step.get("operation", "update"),
+                        entity_id=step.get("step_type"),
+                        entity_name=step.get("description", ""),
+                        description=step.get("description", ""),
+                        metadata={
+                            "step_number": step.get("step_number"),
+                            "step_type": step.get("step_type"),
+                            "data_count": step.get("data_count", 0),
+                            "estimated_duration": step.get("estimated_duration_seconds")
+                        }
+                    )
                 )
-            )
 
-        return operations
+            return operations
+
+        except RequestException as e:
+            raise SyncPlannerError(f"Failed to generate incremental sync plan: API request failed - {str(e)}")
+        except KeyError as e:
+            raise SyncPlannerError(f"Failed to parse sync plan response: Missing field {str(e)}")
+        except Exception as e:
+            raise SyncPlannerError(f"Failed to generate incremental sync plan: {str(e)}")
 
     def detect_conflicts(self, local_changes: List[Dict], cloud_changes: List[Dict]) -> List[Dict[str, Any]]:
         """
