@@ -7,7 +7,7 @@ pydantic==2.5.3
 
 # Sentence transformers for embeddings
 sentence-transformers==2.3.1
-transformers==4.37.2
+transformers==4.38.0  # SECURITY FIX: CVE-2024-37806 (LOW) - Deserialization of untrusted data
 torch==2.1.2
 
 # Utilities
