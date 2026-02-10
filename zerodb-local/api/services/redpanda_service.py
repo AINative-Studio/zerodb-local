@@ -343,14 +343,15 @@ class RedPandaService:
             # Try to list topics
             topics = self.admin_client.list_topics()
 
-            # Get cluster metadata
-            cluster_metadata = self.admin_client._client.cluster_metadata()
+            # Get cluster brokers
+            cluster = self.admin_client._client.cluster
+            brokers = cluster.brokers()
 
             return {
                 "status": "healthy",
                 "bootstrap_servers": self.bootstrap_servers,
                 "topics": topics,
-                "brokers": len(cluster_metadata.brokers())
+                "brokers": len(brokers)
             }
 
         except Exception as e:
