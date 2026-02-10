@@ -32,18 +32,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python dependencies from builder stage
-COPY --from=builder /root/.local /root/.local
+# Create non-root user for security (before copying files)
+RUN useradd -m -u 1000 zerodb
+
+# Copy Python dependencies from builder stage to zerodb user home
+COPY --from=builder /root/.local /home/zerodb/.local
 
 # Make sure scripts in .local are usable
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/home/zerodb/.local/bin:$PATH
 
 # Copy application code
 COPY . .
 
-# Create non-root user for security
-RUN useradd -m -u 1000 zerodb && \
-    chown -R zerodb:zerodb /app
+# Change ownership of app directory
+RUN chown -R zerodb:zerodb /app /home/zerodb/.local
 
 # Switch to non-root user
 USER zerodb
