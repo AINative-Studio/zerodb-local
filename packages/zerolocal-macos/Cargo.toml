@@ -1,0 +1,39 @@
+[package]
+name = "zerolocal-macos"
+version = "0.1.0"
+description = "Native macOS application for ZeroLocal"
+authors = ["AINative Team"]
+license = "MIT"
+repository = "https://github.com/ainative/core"
+edition = "2021"
+rust-version = "1.70"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "1.5", features = ["api-all", "system-tray", "updater"] }
+tokio = { version = "1.35", features = ["full"] }
+bollard = "0.16"
+reqwest = { version = "0.11", features = ["json"] }
+anyhow = "1.0"
+thiserror = "1.0"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+mockall = "0.12"
+tokio-test = "0.4"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true
