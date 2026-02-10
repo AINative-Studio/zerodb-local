@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""
+ZeroDB CLI - Main entry point with new init wizard commands
+
+Manages local ZeroDB environment with interactive setup wizard.
+
+Refs #1132
+"""
+import sys
+from pathlib import Path
+
+# Add CLI directory to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+import typer
+from rich.console import Console
+
+# Import new commands
+from zerodb.commands.init import app as init_app
+from zerodb.commands.status import app as status_app
+from zerodb.commands.logs import app as logs_app
+from zerodb.commands.dashboard import app as dashboard_app
+
+# Import existing commands
+from commands import sync, local, cloud, env, inspect
+
+# Create main app
+app = typer.Typer(
+    name="zerodb",
+    help="ZeroDB Local CLI - Manage local ZeroDB environment and sync with cloud",
+    add_completion=False
+)
+console = Console()
+
+# Register new top-level commands
+app.add_typer(init_app, name="init", help="Initialize ZeroDB environment with setup wizard")
+app.add_typer(status_app, name="status", help="Check service status and health")
+app.add_typer(logs_app, name="logs", help="View service logs")
+app.add_typer(dashboard_app, name="dashboard", help="Open web dashboard")
+
+# Register existing command groups
+app.add_typer(sync.app, name="sync", help="Sync between local and cloud")
+app.add_typer(local.app, name="local", help="Manage local ZeroDB environment")
+app.add_typer(cloud.app, name="cloud", help="Interact with ZeroDB Cloud")
+app.add_typer(env.app, name="env", help="Manage environments")
+app.add_typer(inspect.app, name="inspect", help="Inspect local database state")
+
+
+@app.command()
+def version():
+    """Show CLI version"""
+    console.print("[bold cyan]ZeroDB Local CLI[/bold cyan] v1.0.0")
+    console.print("\nNew features:")
+    console.print("  • [green]zerodb init[/green] - Interactive setup wizard")
+    console.print("  • [green]zerodb status[/green] - Service health checks")
+    console.print("  • [green]zerodb logs[/green] - View service logs")
+    console.print("  • [green]zerodb dashboard[/green] - Open web dashboard")
+
+
+if __name__ == "__main__":
+    app()

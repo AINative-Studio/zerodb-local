@@ -33,8 +33,10 @@ setup(
         "requests>=2.31.0",
         "httpx>=0.24.0",
     ],
+    packages=find_packages(include=['zerodb', 'zerodb.*', 'commands']),
     py_modules=[
         "main",
+        "zerodb_main",
         "config",
         "sync_planner",
         "sync_executor",
@@ -42,7 +44,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "zerodb=main:app",
+            "zerodb=zerodb_main:app",
         ],
     },
 )
