@@ -25,16 +25,22 @@ class RedPandaService:
         # Initialize producer (lazy - created on first publish)
         self._producer = None
 
-        # Initialize admin client (skip in testing mode)
-        if not self.testing:
-            self.admin_client = KafkaAdminClient(
-                bootstrap_servers=self.bootstrap_servers,
-                client_id="zerodb-admin"
-            )
-        else:
-            # Mock admin client for testing
-            from unittest.mock import MagicMock
-            self.admin_client = MagicMock()
+        # Initialize admin client (lazy - created on first use)
+        self._admin_client = None
+
+    def _get_admin_client(self) -> KafkaAdminClient:
+        """Get or create Kafka admin client"""
+        if self._admin_client is None:
+            if not self.testing:
+                self._admin_client = KafkaAdminClient(
+                    bootstrap_servers=self.bootstrap_servers,
+                    client_id="zerodb-admin"
+                )
+            else:
+                # Mock admin client for testing
+                from unittest.mock import MagicMock
+                self._admin_client = MagicMock()
+        return self._admin_client
 
     def _get_producer(self) -> KafkaProducer:
         """Get or create Kafka producer"""
@@ -69,8 +75,11 @@ class RedPandaService:
             topic_name = self.default_topic
 
         try:
+            # Get admin client (lazy initialization)
+            admin_client = self._get_admin_client()
+
             # Check if topic exists
-            existing_topics = self.admin_client.list_topics()
+            existing_topics = admin_client.list_topics()
 
             if topic_name in existing_topics:
                 print(f"✅ Topic '{topic_name}' already exists")
@@ -83,7 +92,7 @@ class RedPandaService:
                 replication_factor=replication_factor
             )
 
-            self.admin_client.create_topics([topic], validate_only=False)
+            admin_client.create_topics([topic], validate_only=False)
             print(f"✅ Created topic '{topic_name}' with {num_partitions} partitions")
             return True
 
@@ -340,11 +349,14 @@ class RedPandaService:
             Health status dict
         """
         try:
+            # Get admin client (lazy initialization)
+            admin_client = self._get_admin_client()
+
             # Try to list topics
-            topics = self.admin_client.list_topics()
+            topics = admin_client.list_topics()
 
             # Get cluster brokers
-            cluster = self.admin_client._client.cluster
+            cluster = admin_client._client.cluster
             brokers = cluster.brokers()
 
             return {
@@ -365,7 +377,8 @@ class RedPandaService:
         """Close producer and admin client"""
         if self._producer:
             self._producer.close()
-        self.admin_client.close()
+        if self._admin_client:
+            self._admin_client.close()
 
 
 # Global instance

@@ -165,6 +165,9 @@ services:
       CLOUD_API_URL: ${CLOUD_API_URL:-https://api.ainative.studio}
       CLOUD_API_KEY: ${CLOUD_API_KEY:-}
 
+      # Authentication
+      ZERODB_AUTH_MODE: ${ZERODB_AUTH_MODE:-local}  # "local" or "cloud"
+
       # Environment
       ZERODB_ENV: ${ZERODB_ENV:-local}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -193,9 +196,6 @@ services:
     environment:
       VITE_API_URL: http://localhost:8000
       VITE_API_INTERNAL_URL: http://zerodb-api:8000
-    volumes:
-      - ./dashboard:/app
-      - /app/node_modules
     ports:
       - "3000:3000"
     networks:

@@ -5,7 +5,6 @@ import { apiClient } from '@/services/api-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Database, HardDrive, Activity, AlertCircle, CheckCircle } from 'lucide-react'
-import { formatRelativeTime } from '@/lib/utils'
 
 export default function DashboardPage() {
   const { data: health, isLoading, error } = useQuery({
@@ -49,7 +48,7 @@ export default function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-red-700">{(error as Error).message}</p>
+            <p className="text-sm text-red-700">{error?.message || 'Unknown error'}</p>
           </CardContent>
         </Card>
       </div>

@@ -5,15 +5,13 @@ import { apiClient } from '@/services/api-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Database, Trash2, ExternalLink, BarChart } from 'lucide-react'
+import { Plus, Database, Trash2, ExternalLink } from 'lucide-react'
 import { formatRelativeTime, formatNumber } from '@/lib/utils'
-import { useState } from 'react'
 import Link from 'next/link'
 import type { Project } from '@/types'
 
 export default function ProjectsPage() {
   const queryClient = useQueryClient()
-  const [isCreating, setIsCreating] = useState(false)
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
@@ -23,7 +21,7 @@ export default function ProjectsPage() {
   const deleteMutation = useMutation({
     mutationFn: (projectId: string) => apiClient.deleteProject(projectId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
     },
   })
 
@@ -47,7 +45,7 @@ export default function ProjectsPage() {
             Manage your ZeroDB projects and collections
           </p>
         </div>
-        <Button onClick={() => setIsCreating(true)}>
+        <Button disabled title="Create project modal coming soon">
           <Plus className="h-4 w-4 mr-2" />
           New Project
         </Button>
@@ -72,7 +70,7 @@ export default function ProjectsPage() {
             <p className="text-gray-500 text-center mb-4">
               Create your first project to start using ZeroLocal
             </p>
-            <Button onClick={() => setIsCreating(true)}>
+            <Button disabled title="Create project modal coming soon">
               <Plus className="h-4 w-4 mr-2" />
               Create Project
             </Button>
