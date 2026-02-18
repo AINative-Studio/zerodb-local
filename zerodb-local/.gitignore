@@ -11,6 +11,8 @@ backups/
 # Logs
 *.log
 logs/
+!dashboard/app/logs/
+!dashboard/tests/app/logs/
 
 # Python
 __pycache__/
@@ -25,6 +27,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+!dashboard/lib/
+!dashboard/tests/lib/
 lib64/
 parts/
 sdist/
