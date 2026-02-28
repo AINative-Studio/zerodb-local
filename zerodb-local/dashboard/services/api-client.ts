@@ -9,6 +9,13 @@ import type {
   Event,
   HealthStatus,
   ApiError,
+  CloudAuthResponse,
+  BundleUploadResponse,
+  BundleDownloadResponse,
+  CloudSyncStatus,
+  BundleInfo,
+  LogsResponse,
+  LogEntry,
 } from '@/types'
 
 class ApiClient {
@@ -162,6 +169,93 @@ class ApiClient {
       `/v1/projects/${projectId}/database/events`,
       { params: { type, limit } }
     )
+    return response.data
+  }
+
+  // Cloud Sync
+  async authenticateCloud(projectId: string, apiKey: string): Promise<CloudAuthResponse> {
+    const response = await this.client.post<CloudAuthResponse>(
+      `/v1/projects/${projectId}/cloud/auth`,
+      { api_key: apiKey }
+    )
+    return response.data
+  }
+
+  async uploadToCloud(
+    projectId: string,
+    bundleData: any,
+    bundleName?: string,
+    metadata?: Record<string, any>
+  ): Promise<BundleUploadResponse> {
+    const response = await this.client.post<BundleUploadResponse>(
+      `/v1/projects/${projectId}/cloud/upload`,
+      {
+        bundle_data: bundleData,
+        bundle_name: bundleName,
+        metadata,
+        compression: true
+      }
+    )
+    return response.data
+  }
+
+  async downloadFromCloud(
+    projectId: string,
+    bundleId: string,
+    includeMetadata = true
+  ): Promise<BundleDownloadResponse> {
+    const response = await this.client.get<BundleDownloadResponse>(
+      `/v1/projects/${projectId}/cloud/download/${bundleId}`,
+      { params: { include_metadata: includeMetadata } }
+    )
+    return response.data
+  }
+
+  async getCloudSyncStatus(projectId: string): Promise<CloudSyncStatus> {
+    const response = await this.client.get<CloudSyncStatus>(
+      `/v1/projects/${projectId}/cloud/status`
+    )
+    return response.data
+  }
+
+  async listCloudBundles(
+    projectId: string,
+    statusFilter?: string,
+    limit = 50,
+    offset = 0
+  ): Promise<BundleInfo[]> {
+    const response = await this.client.get<BundleInfo[]>(
+      `/v1/projects/${projectId}/cloud/bundles`,
+      { params: { status_filter: statusFilter, limit, offset } }
+    )
+    return response.data
+  }
+
+  // Logs
+  async getLogs(
+    service?: string,
+    level?: string,
+    limit = 100,
+    sinceMinutes = 60
+  ): Promise<LogsResponse> {
+    const response = await this.client.get<LogsResponse>('/v1/logs', {
+      params: {
+        service,
+        level,
+        limit,
+        since_minutes: sinceMinutes
+      }
+    })
+    return response.data
+  }
+
+  async getAvailableServices(): Promise<string[]> {
+    const response = await this.client.get<string[]>('/v1/logs/services')
+    return response.data
+  }
+
+  async getLogLevels(): Promise<string[]> {
+    const response = await this.client.get<string[]>('/v1/logs/levels')
     return response.data
   }
 }

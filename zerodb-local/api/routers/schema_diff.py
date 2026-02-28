@@ -20,29 +20,16 @@ from schemas.schema_diff import (
     SchemaDefinition
 )
 
-# Import authentication from core backend (when available)
-try:
-    from app.api.deps import get_current_user_flexible
-    from app.models.user import User
-except ImportError:
-    # Fallback for isolated testing
-    print("Warning: Core authentication not available. Using mock auth for development.")
-    class MockUser:
-        def __init__(self):
-            self.id = "00000000-0000-0000-0000-000000000001"
-            self.email = "dev@localhost"
-            self.organization_id = None
-
-    User = MockUser
-
-    def get_current_user_flexible():
-        return lambda: MockUser()
+# Import authentication from local auth module
+from auth import get_current_user as get_current_user_flexible, User
 
 # Import services
 from services.database_service import database_service
 from services.schema_diff_service import SchemaDiffService
 from services.qdrant_service import QdrantService
 from services.minio_service import MinIOService
+from services.cloud_client import CloudAPIClient
+from services.schema_comparison_service import SchemaComparisonService
 
 
 router = APIRouter()
@@ -54,6 +41,7 @@ schema_diff_service = SchemaDiffService(
     qdrant_service=qdrant_service,
     minio_service=minio_service
 )
+schema_comparison_service = SchemaComparisonService()
 
 
 @router.post("/compare", response_model=SchemaCompareResponse)
@@ -131,12 +119,32 @@ async def compare_schemas(
     if request.cloud_schema:
         cloud_schema = request.cloud_schema
     else:
-        # TODO: Fetch from cloud API (requires cloud sync service)
-        # For now, raise error if not provided
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="cloud_schema is required. Cloud API integration not yet implemented."
-        )
+        # Fetch from cloud API
+        import os
+        api_key = os.getenv("ZERODB_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cloud_schema not provided and ZERODB_API_KEY not configured. "
+                       "Either provide cloud_schema or set ZERODB_API_KEY environment variable."
+            )
+
+        try:
+            async with CloudAPIClient() as cloud_client:
+                # Authenticate with cloud API
+                await cloud_client.authenticate(api_key)
+
+                # Fetch cloud schema
+                cloud_schema_data = await cloud_client.get_cloud_schema(request.project_id)
+
+                # Parse into SchemaDefinition
+                cloud_schema = schema_diff_service.parse_cloud_schema(cloud_schema_data)
+
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch cloud schema: {str(e)}"
+            )
 
     # Compare schemas
     try:
@@ -160,6 +168,23 @@ async def compare_schemas(
 
     # Generate summary
     summary = _generate_comparison_summary(diff, migration_plan)
+
+    # Save comparison to cache
+    try:
+        schema_comparison_service.save_comparison(
+            db=db,
+            project_id=project_uuid,
+            local_schema=local_schema,
+            cloud_schema=cloud_schema,
+            diff=diff,
+            migration_plan=migration_plan,
+            comparison_summary=summary
+        )
+    except Exception as e:
+        # Log error but don't fail the request
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to cache schema comparison: {e}")
 
     return SchemaCompareResponse(
         project_id=request.project_id,
@@ -217,10 +242,36 @@ async def get_breaking_changes(
             detail=f"Project {project_id} not found or access denied"
         )
 
-    # TODO: Implement caching/storage of schema comparisons
-    # For now, return empty list
-    # In production, would retrieve last comparison from cache/database
-    return []
+    # Get latest schema comparison from cache
+    try:
+        latest_comparison = schema_comparison_service.get_latest_comparison(
+            db=db,
+            project_id=project_uuid,
+            include_expired=False
+        )
+
+        if not latest_comparison or not latest_comparison.has_breaking_changes:
+            return []
+
+        # Extract breaking changes from cached diff
+        from schemas.schema_diff import BreakingChange
+        diff_result = latest_comparison.diff_result
+
+        if not diff_result or 'breaking_changes' not in diff_result:
+            return []
+
+        # Convert dict to BreakingChange objects
+        breaking_changes = [
+            BreakingChange(**bc) for bc in diff_result['breaking_changes']
+        ]
+
+        return breaking_changes
+
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to retrieve breaking changes: {e}")
+        return []
 
 
 @router.post("/migration-plan", response_model=MigrationPlan)

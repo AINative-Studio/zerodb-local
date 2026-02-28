@@ -619,14 +619,53 @@ class SyncOrchestrator:
             self.db, project_id
         )
 
-        # TODO: Get cloud schema from CloudAPIClient
-        # For now, assume no schema changes
-        return SchemaChangeInfo(
-            has_changes=False,
-            is_breaking=False,
-            changes=[],
-            migration_required=False
-        )
+        # Get cloud schema from CloudAPIClient
+        import os
+        from services.cloud_client import CloudAPIClient
+
+        api_key = os.getenv("ZERODB_API_KEY")
+        if not api_key:
+            logger.warning("ZERODB_API_KEY not configured, skipping schema comparison")
+            return SchemaChangeInfo(
+                has_changes=False,
+                is_breaking=False,
+                changes=[],
+                migration_required=False
+            )
+
+        try:
+            async with CloudAPIClient() as cloud_client:
+                # Authenticate
+                await cloud_client.authenticate(api_key)
+
+                # Fetch cloud schema
+                cloud_schema_data = await cloud_client.get_cloud_schema(str(project_id))
+
+                # Parse schema
+                cloud_schema = self.schema_diff_service.parse_cloud_schema(cloud_schema_data)
+
+                # Compare schemas
+                diff = self.schema_diff_service.compare_schemas(local_schema, cloud_schema)
+
+                # Convert diff to SchemaChangeInfo
+                return SchemaChangeInfo(
+                    has_changes=diff.total_changes > 0,
+                    is_breaking=diff.has_breaking_changes,
+                    changes=[
+                        f"{change.change_type}: {change.description}"
+                        for change in (diff.added_changes + diff.removed_changes + diff.modified_changes)[:10]
+                    ],
+                    migration_required=diff.has_breaking_changes
+                )
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch cloud schema for comparison: {e}")
+            return SchemaChangeInfo(
+                has_changes=False,
+                is_breaking=False,
+                changes=[],
+                migration_required=False
+            )
 
     async def _detect_conflicts(
         self,

@@ -24,7 +24,8 @@ from routers import (
     events_router,
     change_detection_router,
     sync_state_router,
-    cloud_sync_router
+    cloud_sync_router,
+    logs_router
 )
 from routers.schema_diff import router as schema_diff_router
 from routers.export import router as export_router
@@ -266,6 +267,13 @@ app.include_router(
 app.include_router(
     sync_history_router,
     tags=["Sync History"]
+)
+
+# Logs router (system logs viewing)
+app.include_router(
+    logs_router,
+    prefix="/v1",
+    tags=["Logs"]
 )
 
 

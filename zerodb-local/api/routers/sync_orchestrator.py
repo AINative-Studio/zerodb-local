@@ -24,6 +24,7 @@ from services.sync_orchestrator import SyncOrchestrator
 from services.sync_state_service import SyncStateService
 from services.cdc_service import CDCService
 from services.schema_diff_service import SchemaDiffService
+from services.sync_plan_service import SyncPlanService
 
 router = APIRouter(prefix="/v1/projects", tags=["sync-orchestrator"])
 
@@ -36,6 +37,11 @@ def get_sync_orchestrator(db: Session = Depends(get_db)) -> SyncOrchestrator:
         cdc_service=CDCService(),
         schema_diff_service=SchemaDiffService()
     )
+
+
+def get_sync_plan_service() -> SyncPlanService:
+    """Dependency to get sync plan service instance"""
+    return SyncPlanService()
 
 
 @router.post(
@@ -60,7 +66,9 @@ def get_sync_orchestrator(db: Session = Depends(get_db)) -> SyncOrchestrator:
 async def plan_sync(
     project_id: UUID,
     request: SyncPlanRequest,
-    orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator)
+    orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator),
+    plan_service: SyncPlanService = Depends(get_sync_plan_service),
+    db: Session = Depends(get_db)
 ) -> SyncPlan:
     """
     Generate sync plan
@@ -84,6 +92,15 @@ async def plan_sync(
             conflict_strategy=request.conflict_strategy,
             include_schema=request.include_schema
         )
+
+        # Save plan to database for later execution
+        try:
+            plan_service.save_plan(db, plan)
+        except Exception as save_error:
+            # Log but don't fail - plan can still be used immediately
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to save sync plan: {save_error}")
 
         return plan
 
@@ -115,7 +132,9 @@ async def plan_sync(
 async def execute_sync(
     project_id: UUID,
     request: SyncExecuteRequest,
-    orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator)
+    orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator),
+    plan_service: SyncPlanService = Depends(get_sync_plan_service),
+    db: Session = Depends(get_db)
 ) -> SyncResult:
     """
     Execute sync plan
@@ -132,53 +151,66 @@ async def execute_sync(
         HTTPException: If execution fails or plan not found
     """
     try:
-        # First, we need to retrieve the plan
-        # TODO: Implement plan storage/retrieval
-        # For now, create a simple plan for testing
-
-        from schemas.sync_orchestrator import SyncPlan, SyncStep, EntityCount, SchemaChangeInfo, ConflictInfo
-        from datetime import datetime
-
-        # Create a mock plan for execution
-        mock_plan = SyncPlan(
+        # Retrieve the plan from database
+        plan_model = plan_service.get_plan_by_id(
+            db=db,
             plan_id=request.plan_id,
-            project_id=project_id,
-            direction=SyncDirection.PUSH,
-            created_at=datetime.utcnow(),
-            steps=[
-                SyncStep(
-                    step_number=1,
-                    step_type="schema_validation",
-                    description="Validate schema compatibility",
-                    estimated_duration_seconds=1.0,
-                    data_count=0
-                )
-            ],
-            entity_counts=EntityCount(),
-            estimated_duration_seconds=1.0,
-            estimated_data_size_bytes=0,
-            schema_changes=SchemaChangeInfo(
-                has_changes=False,
-                is_breaking=False,
-                changes=[],
-                migration_required=False
-            ),
-            conflicts=ConflictInfo(
-                has_conflicts=False,
-                conflict_count=0,
-                conflicts=[]
-            ),
-            warnings=[],
-            requires_approval=False,
-            can_rollback=True
+            project_id=project_id
         )
 
+        if not plan_model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Sync plan {request.plan_id} not found"
+            )
+
+        # Check if plan can be executed
+        if not plan_model.is_executable():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Sync plan cannot be executed: status={plan_model.status}, "
+                       f"expired={plan_model.is_expired()}, "
+                       f"requires_approval={plan_model.requires_approval}, "
+                       f"approved={plan_model.approved_at is not None}"
+            )
+
+        # Convert database model to schema
+        from schemas.sync_orchestrator import (
+            SyncPlan, SyncStep, EntityCount, SchemaChangeInfo, ConflictInfo
+        )
+
+        sync_plan = SyncPlan(
+            plan_id=plan_model.plan_id,
+            project_id=plan_model.project_id,
+            direction=SyncDirection(plan_model.direction),
+            created_at=plan_model.created_at,
+            steps=[SyncStep(**step) for step in plan_model.steps],
+            entity_counts=EntityCount(**plan_model.entity_counts),
+            estimated_duration_seconds=plan_model.estimated_duration_seconds,
+            estimated_data_size_bytes=plan_model.estimated_data_size_bytes,
+            schema_changes=SchemaChangeInfo(**plan_model.schema_changes),
+            conflicts=ConflictInfo(**plan_model.conflicts),
+            warnings=plan_model.warnings,
+            requires_approval=plan_model.requires_approval,
+            can_rollback=plan_model.can_rollback
+        )
+
+        # Mark plan as executing
+        plan_service.mark_executing(db, request.plan_id)
+
+        # Execute sync
         result = await orchestrator.execute_sync(
             project_id=project_id,
-            sync_plan=mock_plan,
+            sync_plan=sync_plan,
             approved=request.approved,
             conflict_resolutions=request.conflict_resolutions
         )
+
+        # Update plan status based on result
+        if result.status == SyncStatus.COMPLETED:
+            plan_service.mark_completed(db, request.plan_id, result.sync_id)
+        else:
+            plan_service.mark_failed(db, request.plan_id)
 
         return result
 
@@ -215,7 +247,9 @@ async def execute_sync(
 async def validate_sync_plan(
     project_id: UUID,
     plan_id: UUID,
-    orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator)
+    orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator),
+    plan_service: SyncPlanService = Depends(get_sync_plan_service),
+    db: Session = Depends(get_db)
 ) -> ValidationResult:
     """
     Validate sync plan
@@ -232,38 +266,41 @@ async def validate_sync_plan(
         HTTPException: If plan not found or validation fails
     """
     try:
-        # TODO: Retrieve plan from storage
-        # For now, create a mock plan
-
-        from schemas.sync_orchestrator import SyncPlan, EntityCount, SchemaChangeInfo, ConflictInfo
-        from datetime import datetime
-
-        mock_plan = SyncPlan(
+        # Retrieve plan from database
+        plan_model = plan_service.get_plan_by_id(
+            db=db,
             plan_id=plan_id,
-            project_id=project_id,
-            direction=SyncDirection.PUSH,
-            created_at=datetime.utcnow(),
-            steps=[],
-            entity_counts=EntityCount(),
-            estimated_duration_seconds=0.0,
-            estimated_data_size_bytes=0,
-            schema_changes=SchemaChangeInfo(
-                has_changes=False,
-                is_breaking=False,
-                changes=[],
-                migration_required=False
-            ),
-            conflicts=ConflictInfo(
-                has_conflicts=False,
-                conflict_count=0,
-                conflicts=[]
-            ),
-            warnings=[],
-            requires_approval=False,
-            can_rollback=True
+            project_id=project_id
         )
 
-        result = await orchestrator.validate_sync_plan(mock_plan)
+        if not plan_model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Sync plan {plan_id} not found"
+            )
+
+        # Convert database model to schema
+        from schemas.sync_orchestrator import (
+            SyncPlan, SyncStep, EntityCount, SchemaChangeInfo, ConflictInfo
+        )
+
+        sync_plan = SyncPlan(
+            plan_id=plan_model.plan_id,
+            project_id=plan_model.project_id,
+            direction=SyncDirection(plan_model.direction),
+            created_at=plan_model.created_at,
+            steps=[SyncStep(**step) for step in plan_model.steps],
+            entity_counts=EntityCount(**plan_model.entity_counts),
+            estimated_duration_seconds=plan_model.estimated_duration_seconds,
+            estimated_data_size_bytes=plan_model.estimated_data_size_bytes,
+            schema_changes=SchemaChangeInfo(**plan_model.schema_changes),
+            conflicts=ConflictInfo(**plan_model.conflicts),
+            warnings=plan_model.warnings,
+            requires_approval=plan_model.requires_approval,
+            can_rollback=plan_model.can_rollback
+        )
+
+        result = await orchestrator.validate_sync_plan(sync_plan)
 
         return result
 
