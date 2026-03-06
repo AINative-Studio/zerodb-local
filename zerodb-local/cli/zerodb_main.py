@@ -24,6 +24,9 @@ from zerodb.commands.dashboard import app as dashboard_app
 # Import existing commands
 from commands import sync, local, cloud, env, inspect
 
+# Import branding
+from zerodb.utils.branding import print_logo
+
 # Create main app
 app = typer.Typer(
     name="zerodb",
@@ -49,12 +52,15 @@ app.add_typer(inspect.app, name="inspect", help="Inspect local database state")
 @app.command()
 def version():
     """Show CLI version"""
-    console.print("[bold cyan]ZeroDB Local CLI[/bold cyan] v1.0.0")
-    console.print("\nNew features:")
+    print_logo(console)
+    console.print("[bold]Version:[/bold] v1.0.0\n")
+    console.print("[bold]Features:[/bold]")
     console.print("  • [green]zerodb init[/green] - Interactive setup wizard")
     console.print("  • [green]zerodb status[/green] - Service health checks")
     console.print("  • [green]zerodb logs[/green] - View service logs")
     console.print("  • [green]zerodb dashboard[/green] - Open web dashboard")
+    console.print("  • [green]zerodb sync[/green] - Sync with cloud")
+    console.print("  • [green]zerodb cloud[/green] - Cloud authentication")
 
 
 if __name__ == "__main__":

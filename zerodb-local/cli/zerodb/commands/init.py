@@ -32,6 +32,7 @@ from zerodb.utils.prerequisites import (
     check_all_ports,
     check_disk_space
 )
+from zerodb.utils.branding import print_logo, print_welcome_message
 
 app = typer.Typer(help="Initialize ZeroDB Local environment")
 console = Console()
@@ -260,6 +261,10 @@ def init(
     Initialize ZeroDB Local environment with interactive setup wizard
     """
     try:
+        # Display logo and welcome
+        print_logo(console)
+        print_welcome_message(console, duration="60 seconds")
+
         # Welcome message
         console.print(Panel(
             "[bold cyan]ZeroDB Local Setup Wizard[/bold cyan]\n\n"
