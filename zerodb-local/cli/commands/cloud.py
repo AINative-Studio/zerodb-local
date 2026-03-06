@@ -51,8 +51,9 @@ def cloud_login(
 
         console.print(f"[cyan]Logging in to {cloud_api_url}...[/cyan]")
 
+        # The correct endpoint is /v1/auth/login (not /api/v1/auth/login)
         response = requests.post(
-            f"{cloud_api_url}/auth/login",
+            f"{cloud_api_url}/v1/auth/login",
             json={"email": email, "password": password},
             timeout=30
         )

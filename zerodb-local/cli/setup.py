@@ -15,7 +15,7 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/relycapital/core",
-    packages=find_packages(),
+    packages=find_packages(include=['zerodb', 'zerodb.*', 'commands']),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -33,7 +33,6 @@ setup(
         "requests>=2.31.0",
         "httpx>=0.24.0",
     ],
-    packages=find_packages(include=['zerodb', 'zerodb.*', 'commands']),
     py_modules=[
         "main",
         "zerodb_main",
