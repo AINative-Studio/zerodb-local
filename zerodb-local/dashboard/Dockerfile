@@ -18,16 +18,8 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy all files
 COPY . .
 
-# Build arguments for Next.js
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
-ARG VITE_API_INTERNAL_URL=http://zerodb-api:8000
-
-# Set environment variables for build
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-ENV VITE_API_INTERNAL_URL=${VITE_API_INTERNAL_URL}
-ENV NEXT_TELEMETRY_DISABLED=1
-
 # Build Next.js application
+ENV NEXT_TELEMETRY_DISABLED 1
 RUN npm run build
 
 # Stage 3: Runner
