@@ -4,7 +4,7 @@ const nextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   env: {
-    API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+    API_URL: process.env.VITE_API_URL || 'http://localhost:8000',
   },
   async rewrites() {
     return [

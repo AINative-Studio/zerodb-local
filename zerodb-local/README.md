@@ -24,9 +24,9 @@ Run ZeroDB entirely on your local machine with Docker Compose. Develop, test, an
 
 ### Installation
 
-1. **Navigate to ZeroLocal directory**:
+1. **Clone the repository**:
    ```bash
-   cd zerodb-local
+   cd /Users/aideveloper/core/zerodb-local
    ```
 
 2. **Copy environment template**:

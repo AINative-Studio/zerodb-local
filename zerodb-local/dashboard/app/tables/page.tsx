@@ -1,30 +1,15 @@
 'use client'
 
-import { useState, useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '@/services/api-client'
-import { Table } from '@/types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Database, Plus, Loader2 } from 'lucide-react'
-import {
-  CreateTableDialog,
-  EnhancedTableCard,
-  TableDataBrowser,
-  SearchFilter,
-  FilterStatus,
-  SortBy,
-} from '@/components/tables'
+import { Table as TableIcon, Database, FileJson } from 'lucide-react'
+import { useState } from 'react'
+import { formatRelativeTime, formatNumber } from '@/lib/utils'
 
 export default function TablesPage() {
-  const queryClient = useQueryClient()
   const [selectedProject, setSelectedProject] = useState<string>()
-  const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  const [browserDialogOpen, setBrowserDialogOpen] = useState(false)
-  const [selectedTable, setSelectedTable] = useState<Table | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all')
-  const [sortBy, setSortBy] = useState<SortBy>('name')
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
@@ -37,94 +22,17 @@ export default function TablesPage() {
     enabled: !!selectedProject,
   })
 
-  const deleteTableMutation = useMutation({
-    mutationFn: async (tableName: string) => {
-      if (!selectedProject) throw new Error('No project selected')
-      return apiClient.deleteTable(selectedProject, tableName)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tables', selectedProject] })
-    },
-  })
-
-  const filteredAndSortedTables = useMemo(() => {
-    if (!tables) return []
-
-    let filtered = tables
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter((table) =>
-        table.name.toLowerCase().includes(query)
-      )
-    }
-
-    if (filterStatus === 'has-data') {
-      filtered = filtered.filter((table) => (table.row_count ?? 0) > 0)
-    } else if (filterStatus === 'empty') {
-      filtered = filtered.filter((table) => (table.row_count ?? 0) === 0)
-    }
-
-    const sorted = [...filtered].sort((a, b) => {
-      switch (sortBy) {
-        case 'name':
-          return a.name.localeCompare(b.name)
-        case 'created':
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        case 'updated':
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-        case 'rows':
-          return (b.row_count ?? 0) - (a.row_count ?? 0)
-        default:
-          return 0
-      }
-    })
-
-    return sorted
-  }, [tables, searchQuery, filterStatus, sortBy])
-
-  const handleViewData = (table: Table) => {
-    setSelectedTable(table)
-    setBrowserDialogOpen(true)
-  }
-
-  const handleEditTable = (table: Table) => {
-    console.log('Edit table:', table)
-  }
-
-  const handleDeleteTable = async (table: Table) => {
-    if (confirm(`Are you sure you want to delete the table "${table.name}"? This action cannot be undone.`)) {
-      try {
-        await deleteTableMutation.mutateAsync(table.name)
-      } catch (error) {
-        console.error('Failed to delete table:', error)
-      }
-    }
-  }
-
-  const handleExportTable = (table: Table) => {
-    console.log('Export table:', table)
-  }
-
   return (
     <div className="p-8">
+      {/* Header */}
       <div className="mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h1 className="text-3xl font-bold mb-2">NoSQL Tables</h1>
-            <p className="text-gray-600">
-              Browse and manage your document-based data collections
-            </p>
-          </div>
-          {selectedProject && (
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Table
-            </Button>
-          )}
-        </div>
+        <h1 className="text-3xl font-bold mb-2">NoSQL Tables</h1>
+        <p className="text-gray-600">
+          Browse and manage your document-based data collections
+        </p>
       </div>
 
+      {/* Project Selector */}
       <Card className="mb-6">
         <CardHeader>
           <CardTitle className="text-lg">Select Project</CardTitle>
@@ -148,58 +56,54 @@ export default function TablesPage() {
         </CardContent>
       </Card>
 
+      {/* Tables List */}
       {selectedProject && (
-        <>
-          <div className="mb-6">
-            <SearchFilter
-              onSearchChange={setSearchQuery}
-              onFilterChange={setFilterStatus}
-              onSortChange={setSortBy}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {isLoading ? (
-              <Card>
-                <CardContent className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {isLoading ? (
+            <Card>
+              <CardContent className="flex justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+              </CardContent>
+            </Card>
+          ) : tables && tables.length > 0 ? (
+            tables.map((table) => (
+              <Card key={table.id} className="hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <CardTitle className="text-xl mb-1">{table.name}</CardTitle>
+                      <CardDescription>NoSQL collection</CardDescription>
+                    </div>
+                    <TableIcon className="h-5 w-5 text-gray-400" />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2 mb-4">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Rows</span>
+                      <span className="font-medium">{formatNumber(table.row_count)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Created</span>
+                      <span className="font-medium">{formatRelativeTime(table.created_at)}</span>
+                    </div>
+                  </div>
+                  <Button variant="outline" className="w-full" size="sm">
+                    <FileJson className="h-3 w-3 mr-2" />
+                    View Data
+                  </Button>
                 </CardContent>
               </Card>
-            ) : filteredAndSortedTables.length > 0 ? (
-              filteredAndSortedTables.map((table) => (
-                <EnhancedTableCard
-                  key={table.id}
-                  table={table}
-                  onViewData={handleViewData}
-                  onEdit={handleEditTable}
-                  onDelete={handleDeleteTable}
-                  onExport={handleExportTable}
-                />
-              ))
-            ) : (
-              <Card className="col-span-full">
-                <CardContent className="flex flex-col items-center justify-center py-12">
-                  <Database className="h-12 w-12 text-gray-400 mb-4" />
-                  <p className="text-gray-500">
-                    {searchQuery || filterStatus !== 'all'
-                      ? 'No tables match your filters'
-                      : 'No tables in this project'}
-                  </p>
-                  {!searchQuery && filterStatus === 'all' && (
-                    <Button
-                      variant="outline"
-                      className="mt-4"
-                      onClick={() => setCreateDialogOpen(true)}
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Create Your First Table
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </>
+            ))
+          ) : (
+            <Card className="col-span-full">
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <TableIcon className="h-12 w-12 text-gray-400 mb-4" />
+                <p className="text-gray-500">No tables in this project</p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {!selectedProject && (
@@ -209,25 +113,6 @@ export default function TablesPage() {
             <p className="text-gray-500">Select a project to view tables</p>
           </CardContent>
         </Card>
-      )}
-
-      {selectedProject && (
-        <>
-          <CreateTableDialog
-            projectId={selectedProject}
-            open={createDialogOpen}
-            onOpenChange={setCreateDialogOpen}
-          />
-
-          {selectedTable && (
-            <TableDataBrowser
-              projectId={selectedProject}
-              table={selectedTable}
-              open={browserDialogOpen}
-              onOpenChange={setBrowserDialogOpen}
-            />
-          )}
-        </>
       )}
     </div>
   )

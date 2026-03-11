@@ -136,33 +136,6 @@ class ApiClient {
     return response.data
   }
 
-  async createTable(
-    projectId: string,
-    data: { name: string; description?: string; schema: any }
-  ): Promise<Table> {
-    const response = await this.client.post<Table>(
-      `/v1/projects/${projectId}/database/tables`,
-      data
-    )
-    return response.data
-  }
-
-  async updateTable(
-    projectId: string,
-    tableName: string,
-    data: { description?: string; schema?: any }
-  ): Promise<Table> {
-    const response = await this.client.patch<Table>(
-      `/v1/projects/${projectId}/database/tables/${tableName}`,
-      data
-    )
-    return response.data
-  }
-
-  async deleteTable(projectId: string, tableName: string): Promise<void> {
-    await this.client.delete(`/v1/projects/${projectId}/database/tables/${tableName}`)
-  }
-
   async queryTable(
     projectId: string,
     tableName: string,
@@ -173,16 +146,6 @@ class ApiClient {
       { filters }
     )
     return response.data
-  }
-
-  async deleteTableRow(
-    projectId: string,
-    tableName: string,
-    rowId: string
-  ): Promise<void> {
-    await this.client.delete(
-      `/v1/projects/${projectId}/database/tables/${tableName}/rows/${rowId}`
-    )
   }
 
   // Files

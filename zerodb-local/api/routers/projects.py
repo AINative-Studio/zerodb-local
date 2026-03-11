@@ -32,7 +32,7 @@ except ImportError:
     User = MockUser
 
     def get_current_user_flexible():
-        return MockUser()
+        return lambda: MockUser()
 
 # Import database service
 from services.database_service import database_service
