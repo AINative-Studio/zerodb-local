@@ -40,10 +40,11 @@ export interface Memory {
 
 export interface Table {
   id: string
-  project_id: string
+  project_id?: string
   name: string
+  description?: string
   schema?: Record<string, any>
-  row_count: number
+  row_count?: number
   created_at: string
   updated_at: string
 }

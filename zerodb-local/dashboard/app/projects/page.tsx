@@ -136,17 +136,12 @@ function ProjectCard({ project, onDelete }: ProjectCardProps) {
         </div>
 
         {/* Actions */}
-        <div className="flex gap-2">
-          <Link href={`/projects/${project.id}`} className="flex-1">
-            <Button variant="outline" className="w-full" size="sm">
-              <ExternalLink className="h-3 w-3 mr-2" />
-              View
-            </Button>
-          </Link>
+        <div className="flex gap-2 justify-end">
           <Button
             variant="destructive"
             size="sm"
             onClick={onDelete}
+            title="Delete project"
           >
             <Trash2 className="h-3 w-3" />
           </Button>

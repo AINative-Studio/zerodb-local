@@ -72,7 +72,7 @@ class TablesService:
         # Create table
         insert_query = text("""
             INSERT INTO tables (project_id, name, schema, description)
-            VALUES (:project_id, :name, :schema::jsonb, :description)
+            VALUES (:project_id, :name, CAST(:schema AS jsonb), :description)
             RETURNING id, name, schema, description, created_at, updated_at
         """)
 
