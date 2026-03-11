@@ -1,0 +1,46 @@
+# Include documentation
+include README.md
+include QUICKSTART.md
+include RELEASE_NOTES.md
+include LICENSE
+
+# Include configuration files
+include docker-compose.yml
+include .env.local.example
+include .env.production.example
+include .env.staging.example
+include install.sh
+include .gitignore
+
+# Include all scripts
+recursive-include scripts *.sh *.py
+
+# Include API files (but not venv or cache)
+recursive-include api *.py *.sh *.sql *.txt *.md
+recursive-include api/db *
+exclude api/.venv
+exclude api/venv
+exclude api/__pycache__
+
+# Include dashboard files (but not node_modules)
+recursive-include dashboard *.json *.js *.jsx *.ts *.tsx *.html *.css *.md *.sh
+exclude dashboard/node_modules
+exclude dashboard/dist
+exclude dashboard/build
+
+# Include embeddings service
+recursive-include embeddings *.py Dockerfile *.txt *.md
+
+# Include documentation
+recursive-include docs *.md *.txt
+
+# Exclude development and build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.log
+global-exclude .pytest_cache
+global-exclude node_modules
+global-exclude dist
+global-exclude build

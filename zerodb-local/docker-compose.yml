@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL with pgvector extension for vector storage
   postgres:
@@ -174,7 +172,7 @@ services:
     volumes:
       - ./api:/app
     ports:
-      - "8000:8000"
+      - "8080:8000"
     networks:
       - zerodb-network
     healthcheck:
@@ -189,12 +187,15 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080
+        VITE_API_INTERNAL_URL: http://zerodb-api:8000
     container_name: zerodb-dashboard
     depends_on:
       zerodb-api:
         condition: service_healthy
     environment:
-      VITE_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8080
       VITE_API_INTERNAL_URL: http://zerodb-api:8000
     ports:
       - "3000:3000"

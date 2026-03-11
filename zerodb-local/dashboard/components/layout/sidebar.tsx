@@ -29,11 +29,21 @@ export function Sidebar() {
   return (
     <div className="flex h-full w-64 flex-col border-r bg-white">
       {/* Logo */}
-      <div className="flex h-16 items-center border-b px-6">
-        <div className="flex items-center gap-2">
-          <Database className="h-6 w-6 text-blue-600" />
-          <span className="text-xl font-bold">ZeroLocal</span>
-        </div>
+      <div className="flex items-center border-b px-4 py-3">
+        <pre className="text-[6px] leading-[0.7] text-blue-600 font-mono whitespace-pre">
+{`███████╗███████╗██████╗  ██████╗
+╚══███╔╝██╔════╝██╔══██╗██╔═══██╗
+  ███╔╝ █████╗  ██████╔╝██║   ██║
+ ███╔╝  ██╔══╝  ██╔══██╗██║   ██║
+███████╗███████╗██║  ██║╚██████╔╝
+╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝
+██╗      ██████╗  ██████╗ █████╗ ██╗
+██║     ██╔═══██╗██╔════╝██╔══██╗██║
+██║     ██║   ██║██║     ███████║██║
+██║     ██║   ██║██║     ██╔══██║██║
+███████╗╚██████╔╝╚██████╗██║  ██║███████╗
+╚══════╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝`}
+        </pre>
       </div>
 
       {/* Navigation */}

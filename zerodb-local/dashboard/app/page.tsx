@@ -5,15 +5,19 @@ import { apiClient } from '@/services/api-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Database, HardDrive, Activity, AlertCircle, CheckCircle } from 'lucide-react'
+import { HeroSection } from '@/components/home/HeroSection'
+import { FeatureCards } from '@/components/home/FeatureCards'
+import { CodeExamplesSection } from '@/components/home/CodeExamplesSection'
+import { QuickStats } from '@/components/home/QuickStats'
 
-export default function DashboardPage() {
+export default function DashboardPage(): JSX.Element {
   const { data: health, isLoading, error } = useQuery({
     queryKey: ['health'],
     queryFn: () => apiClient.getHealth(),
     refetchInterval: 5000,
   })
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string): 'success' | 'warning' | 'destructive' => {
     switch (status) {
       case 'healthy':
         return 'success'
@@ -56,20 +60,34 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">ZeroLocal Dashboard</h1>
-        <p className="text-gray-600">Monitor your self-hosted AI database</p>
-      </div>
+    <div className="p-8 max-w-7xl mx-auto">
+      {/* Hero Section */}
+      <HeroSection />
+
+      {/* Feature Cards */}
+      <FeatureCards />
+
+      {/* Quick Stats */}
+      <QuickStats
+        totalVectors={0}
+        tablesCreated={0}
+        filesStored={0}
+      />
+
+      {/* Code Examples */}
+      <CodeExamplesSection />
 
       {/* System Status Overview */}
-      <div className="mb-6">
+      <section className="mb-8" aria-labelledby="system-status-heading">
+        <h2 id="system-status-heading" className="text-2xl font-bold mb-4 text-gray-900">
+          System Status
+        </h2>
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle>System Status</CardTitle>
-                <CardDescription>Overall health of all services</CardDescription>
+                <CardTitle>Overall Health</CardTitle>
+                <CardDescription>Real-time status of all services</CardDescription>
               </div>
               <Badge variant={getStatusColor(health?.status || 'unhealthy')}>
                 {health?.status?.toUpperCase()}
@@ -82,10 +100,10 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </section>
 
       {/* Service Status Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <ServiceCard
           name="PostgreSQL"
           status={health?.services.postgres.status || 'unhealthy'}
@@ -122,46 +140,6 @@ export default function DashboardPage() {
           description="Local embeddings (BAAI BGE)"
         />
       </div>
-
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>API Endpoint</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">localhost:8000</div>
-            <p className="text-xs text-gray-500 mt-1">Local development</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Dashboard</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">localhost:3000</div>
-            <p className="text-xs text-gray-500 mt-1">This interface</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Version</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">1.0.0</div>
-            <p className="text-xs text-gray-500 mt-1">ZeroLocal</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Mode</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">Local</div>
-            <p className="text-xs text-gray-500 mt-1">No API costs</p>
-          </CardContent>
-        </Card>
-      </div>
     </div>
   )
 }
@@ -174,7 +152,7 @@ interface ServiceCardProps {
   description: string
 }
 
-function ServiceCard({ name, status, latency, icon, description }: ServiceCardProps) {
+function ServiceCard({ name, status, latency, icon, description }: ServiceCardProps): JSX.Element {
   const isHealthy = status === 'healthy'
 
   return (
