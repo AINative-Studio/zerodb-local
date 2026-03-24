@@ -174,3 +174,47 @@ class TestGenerateModelEdgeCases:
         schema = {"count": {"type": "integer", "default": 0}}
         code = generate_model("t", schema)
         assert "count: int = 0" in code
+
+
+class TestEnumLiteralSupport:
+    """Scenario: Fields with enum/choices/values generate Literal types."""
+
+    def test_string_enum_generates_literal(self):
+        """Given a string field with enum, generate Literal type."""
+        schema = {"status": {"type": "string", "enum": ["draft", "published", "archived"]}}
+        code = generate_model("t", schema)
+        ast.parse(code)
+        assert "status: Literal['draft', 'published', 'archived']" in code
+
+    def test_integer_choices_generates_literal(self):
+        """Given an integer field with choices, generate Literal type."""
+        schema = {"priority": {"type": "integer", "choices": [1, 2, 3, 4, 5]}}
+        code = generate_model("t", schema)
+        ast.parse(code)
+        assert "priority: Literal[1, 2, 3, 4, 5]" in code
+
+    def test_nullable_enum_wraps_in_optional(self):
+        """Given a nullable enum field, wrap Literal in Optional."""
+        schema = {"category": {"type": "string", "enum": ["A", "B"], "nullable": True}}
+        code = generate_model("t", schema)
+        ast.parse(code)
+        assert "category: Optional[Literal['A', 'B']] = None" in code
+
+    def test_literal_import_added_when_enum_used(self):
+        """When enum fields are present, Literal must be imported."""
+        schema = {"status": {"type": "string", "enum": ["on", "off"]}}
+        code = generate_model("t", schema)
+        assert "from typing import Literal" in code
+
+    def test_values_key_also_works(self):
+        """The 'values' key should also trigger Literal generation."""
+        schema = {"level": {"type": "string", "values": ["low", "medium", "high"]}}
+        code = generate_model("t", schema)
+        ast.parse(code)
+        assert "level: Literal['low', 'medium', 'high']" in code
+
+    def test_no_literal_import_without_enums(self):
+        """Without enum fields, Literal should not be imported."""
+        schema = {"name": "string"}
+        code = generate_model("t", schema)
+        assert "Literal" not in code

@@ -156,7 +156,24 @@ def generate_model(table_name: str, schema_def: Dict[str, Any]) -> str:
             default = None
             description = None
 
-        py_type = _python_type(ftype, nullable)
+        # Check for enum/choices/values constraints
+        enum_values = None
+        if isinstance(field_info, dict):
+            enum_values = (
+                field_info.get("enum")
+                or field_info.get("choices")
+                or field_info.get("values")
+            )
+
+        if enum_values and isinstance(enum_values, list) and len(enum_values) > 0:
+            # Build Literal type from enum values
+            literal_args = ", ".join(repr(v) for v in enum_values)
+            py_type = f"Literal[{literal_args}]"
+            if nullable:
+                py_type = f"Optional[Literal[{literal_args}]]"
+            extra_imports.add("from typing import Literal")
+        else:
+            py_type = _python_type(ftype, nullable)
 
         # Track needed imports
         base_type = py_type.replace("Optional[", "").rstrip("]")
