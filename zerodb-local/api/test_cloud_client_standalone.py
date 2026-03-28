@@ -95,6 +95,7 @@ class TestCloudAPIClientInit:
         assert client.base_url == "https://api.ainative.studio"
         assert client.timeout == 30
         assert client.max_retries == 3
+        assert client._api_key is None
         assert client._auth_token is None
         assert client._token_expires_at is None
         assert client._client is None
@@ -127,31 +128,33 @@ class TestCloudAPIClientAuthentication:
 
     @pytest.mark.asyncio
     async def test_authenticate_success(self, cloud_client, mock_auth_response):
-        """Test successful authentication"""
+        """Test successful authentication via API key + /v1/api-keys validation"""
         with patch.object(cloud_client, '_request') as mock_request:
-            # Mock successful response
+            # Mock /v1/api-keys response
             mock_response = Mock()
-            mock_response.json.return_value = mock_auth_response
+            mock_response.json.return_value = {
+                "total": 3,
+                "keys": []
+            }
             mock_request.return_value = mock_response
 
             # Authenticate
-            result = await cloud_client.authenticate("test_api_key_12345678901234567890123456")
+            api_key = "sk_test_api_key_12345678901234567890"
+            result = await cloud_client.authenticate(api_key)
 
-            # Verify request
+            # Verify request hits /v1/api-keys with auth
             mock_request.assert_called_once()
             call_args = mock_request.call_args
-            assert call_args[0][0] == "POST"
-            assert call_args[0][1] == "/v1/auth/api-key"
-            assert call_args[1]["auth_required"] is False
+            assert call_args[0][0] == "GET"
+            assert call_args[0][1] == "/v1/api-keys"
+            assert call_args[1]["auth_required"] is True
 
             # Verify response
             assert isinstance(result, CloudAuthResponse)
-            assert result.auth_token == "test_token_abc123"
-            assert result.expires_in == 3600
+            assert result.auth_token == api_key
 
-            # Verify token storage
-            assert cloud_client._auth_token == "test_token_abc123"
-            assert cloud_client._token_expires_at is not None
+            # Verify API key stored directly
+            assert cloud_client._api_key == api_key
 
     @pytest.mark.asyncio
     async def test_authenticate_invalid_key(self, cloud_client):
@@ -170,20 +173,23 @@ class TestCloudAPIClientAuthentication:
             assert "Invalid API key" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_token_expiration_check(self, cloud_client):
-        """Test token expiration validation"""
-        # Set expired token
+    async def test_authentication_check(self, cloud_client):
+        """Test authentication validation with API key and token fallback"""
+        # Not authenticated initially
+        assert not cloud_client._is_authenticated()
+
+        # API key auth
+        cloud_client._api_key = "sk_test"
+        assert cloud_client._is_authenticated()
+
+        # Reset and test token fallback
+        cloud_client._api_key = None
         cloud_client._auth_token = "expired_token"
         cloud_client._token_expires_at = datetime.utcnow() - timedelta(hours=1)
+        assert not cloud_client._is_authenticated()
 
-        # Token should be invalid
-        assert not cloud_client._is_token_valid()
-
-        # Set valid token
         cloud_client._token_expires_at = datetime.utcnow() + timedelta(hours=1)
-
-        # Token should be valid
-        assert cloud_client._is_token_valid()
+        assert cloud_client._is_authenticated()
 
     def test_auth_headers_no_token(self, cloud_client):
         """Test getting auth headers without authentication"""
@@ -193,15 +199,19 @@ class TestCloudAPIClientAuthentication:
 
         assert "Not authenticated" in str(exc_info.value)
 
-    def test_auth_headers_with_token(self, cloud_client):
-        """Test getting auth headers with valid token"""
-        # Set valid token
+    def test_auth_headers_with_api_key(self, cloud_client):
+        """Test getting auth headers with API key"""
+        cloud_client._api_key = "sk_test_key"
+
+        headers = cloud_client._get_auth_headers()
+        assert headers["X-API-Key"] == "sk_test_key"
+
+    def test_auth_headers_with_token_fallback(self, cloud_client):
+        """Test getting auth headers with Bearer token when no API key"""
         cloud_client._auth_token = "test_token"
         cloud_client._token_expires_at = datetime.utcnow() + timedelta(hours=1)
 
-        # Get headers
         headers = cloud_client._get_auth_headers()
-
         assert headers["Authorization"] == "Bearer test_token"
 
 

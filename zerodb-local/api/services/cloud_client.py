@@ -76,6 +76,7 @@ class CloudAPIClient:
         self.max_retries = max_retries
 
         # Authentication state
+        self._api_key: Optional[str] = None
         self._auth_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
 
@@ -116,23 +117,25 @@ class CloudAPIClient:
             self._client = None
             logger.info("CloudAPIClient closed")
 
-    def _is_token_valid(self) -> bool:
-        """Check if current auth token is valid and not expired"""
+    def _is_authenticated(self) -> bool:
+        """Check if client has valid authentication (API key or token)"""
+        if self._api_key:
+            return True
         if not self._auth_token or not self._token_expires_at:
             return False
-
-        # Consider token expired 60 seconds before actual expiration
         buffer_seconds = 60
         return datetime.utcnow() + timedelta(seconds=buffer_seconds) < self._token_expires_at
 
     def _get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers with Bearer token"""
-        if not self._is_token_valid():
-            raise CloudAPIAuthenticationError(
-                "Not authenticated or token expired. Call authenticate() first."
-            )
-
-        return {"Authorization": f"Bearer {self._auth_token}"}
+        """Get authentication headers (X-API-Key or Bearer token)"""
+        if self._api_key:
+            return {"X-API-Key": self._api_key}
+        if self._auth_token and self._token_expires_at:
+            if datetime.utcnow() + timedelta(seconds=60) < self._token_expires_at:
+                return {"Authorization": f"Bearer {self._auth_token}"}
+        raise CloudAPIAuthenticationError(
+            "Not authenticated. Call authenticate() first."
+        )
 
     @retry(
         stop=stop_after_attempt(3),
@@ -226,45 +229,47 @@ class CloudAPIClient:
 
     async def authenticate(self, api_key: str) -> CloudAuthResponse:
         """
-        Authenticate with ZeroDB Cloud API using API key
+        Authenticate with ZeroDB Cloud API using API key.
+
+        Uses the API key directly via X-API-Key header (no token exchange needed).
+        Validates the key by calling /v1/auth/me.
 
         Args:
-            api_key: ZeroDB Cloud API key
+            api_key: AINative platform API key (sk_...)
 
         Returns:
-            CloudAuthResponse with bearer token and expiration
+            CloudAuthResponse with auth confirmation
 
         Raises:
             CloudAPIAuthenticationError: Invalid API key
             CloudAPIConnectionError: Connection failed
         """
-        logger.info("Authenticating with ZeroDB Cloud API")
+        logger.info("Authenticating with ZeroDB Cloud API via API key")
 
-        request = CloudAuthRequest(api_key=api_key)
+        self._api_key = api_key
 
         try:
+            # Validate the key by listing API keys (supports X-API-Key auth)
+            # Note: /v1/auth/me uses JWT-only auth, so we use /v1/api-keys instead
             response = await self._request(
-                "POST",
-                "/v1/auth/api-key",
-                auth_required=False,
-                json=request.model_dump()
+                "GET",
+                "/v1/api-keys",
+                auth_required=True,
             )
 
-            auth_response = CloudAuthResponse(**response.json())
-
-            # Store token and expiration
-            self._auth_token = auth_response.auth_token
-            self._token_expires_at = datetime.utcnow() + timedelta(
-                seconds=auth_response.expires_in
-            )
-
+            data = response.json()
             logger.info(
-                f"Authentication successful. Token expires at {self._token_expires_at}"
+                f"Authentication successful. Account has {data.get('total', 0)} API keys."
             )
 
-            return auth_response
+            # Return a CloudAuthResponse for backward compatibility
+            return CloudAuthResponse(
+                auth_token=api_key,
+                expires_in=86400 * 365,  # API keys don't expire via time
+            )
 
         except Exception as e:
+            self._api_key = None
             logger.error(f"Authentication failed: {e}")
             raise
 
