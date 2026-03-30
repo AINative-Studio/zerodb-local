@@ -9,18 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 # Import authentication
-try:
-    from app.api.deps import get_current_user_flexible
-    from app.models.user import User
-except ImportError:
-    class MockUser:
-        def __init__(self):
-            self.id = "00000000-0000-0000-0000-000000000001"
-
-    User = MockUser
-    def get_current_user_flexible():
-        return lambda: MockUser()
-
+from auth import get_current_user_flexible, User
 # Import services
 from services.database_service import database_service
 from services.vector_service import vector_service

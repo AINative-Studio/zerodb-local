@@ -25,23 +25,7 @@ from schemas.change_log import (
 )
 
 # Import authentication from core backend (when available)
-try:
-    from app.api.deps import get_current_user_flexible
-    from app.models.user import User
-except ImportError:
-    # Fallback for isolated testing
-    print("Warning: Core authentication not available. Using mock auth for development.")
-    class MockUser:
-        def __init__(self):
-            self.id = "00000000-0000-0000-0000-000000000001"
-            self.email = "dev@localhost"
-            self.organization_id = None
-
-    User = MockUser
-
-    def get_current_user_flexible():
-        return lambda: MockUser()
-
+from auth import get_current_user_flexible, User
 # Import database and CDC services
 from services.database_service import database_service
 from services.cdc_service import CDCService
@@ -60,7 +44,7 @@ async def get_changes(
     unsynced_only: bool = Query(False, description="Only return unsynced changes"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    current_user: User = Depends(get_current_user_flexible()),
+    current_user: User = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
     """
@@ -138,7 +122,7 @@ async def get_changes(
 async def get_change_count(
     project_id: str = Query(..., description="Project ID"),
     entity_type: Optional[EntityType] = Query(None, description="Filter by entity type"),
-    current_user: User = Depends(get_current_user_flexible()),
+    current_user: User = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
     """
@@ -176,7 +160,7 @@ async def get_change_count(
 @router.post("/changes/mark-synced", response_model=MarkSyncedResponse)
 async def mark_changes_synced(
     request: MarkSyncedRequest,
-    current_user: User = Depends(get_current_user_flexible()),
+    current_user: User = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
     """
@@ -213,7 +197,7 @@ async def cleanup_old_changes(
     project_id: str = Query(..., description="Project ID"),
     older_than_days: int = Query(30, ge=1, le=365, description="Delete changes older than this"),
     dry_run: bool = Query(False, description="Preview deletion without executing"),
-    current_user: User = Depends(get_current_user_flexible()),
+    current_user: User = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
     """
