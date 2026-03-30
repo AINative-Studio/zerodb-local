@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS change_log (
     data JSONB,
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     synced BOOLEAN DEFAULT FALSE,
+    synced_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
 
     CONSTRAINT change_log_operation_check CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE'))
 );
