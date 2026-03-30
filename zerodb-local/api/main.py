@@ -177,67 +177,20 @@ async def health_check():
     return await get_aggregated_health()
 
 
-# Include routers
-app.include_router(
-    projects_router,
-    prefix="/v1/projects",
-    tags=["Projects"]
-)
+# Include routers at both /v1/ (local dev) and /api/v1/ (cloud sync compat)
+for _prefix_base in ["/v1", "/api/v1"]:
+    app.include_router(projects_router, prefix=f"{_prefix_base}/projects", tags=["Projects"])
+    app.include_router(vectors_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/vectors", tags=["Vectors"])
+    app.include_router(memory_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/memory", tags=["Memory"])
+    app.include_router(tables_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/tables", tags=["Tables"])
+    app.include_router(files_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/files", tags=["Files"])
+    app.include_router(events_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/events", tags=["Events"])
+    app.include_router(sync_state_router, prefix=f"{_prefix_base}/projects/{{project_id}}/sync", tags=["Sync State"])
+    app.include_router(cloud_sync_router, prefix=f"{_prefix_base}/projects", tags=["Cloud Sync"])
 
-# Database sub-routers (nested under projects)
-app.include_router(
-    vectors_router,
-    prefix="/v1/projects/{project_id}/database/vectors",
-    tags=["Vectors"]
-)
-app.include_router(
-    memory_router,
-    prefix="/v1/projects/{project_id}/database/memory",
-    tags=["Memory"]
-)
-app.include_router(
-    tables_router,
-    prefix="/v1/projects/{project_id}/database/tables",
-    tags=["Tables"]
-)
-app.include_router(
-    files_router,
-    prefix="/v1/projects/{project_id}/database/files",
-    tags=["Files"]
-)
-app.include_router(
-    events_router,
-    prefix="/v1/projects/{project_id}/database/events",
-    tags=["Events"]
-)
-
-# Sync/CDC router (project-level, not database-level)
-app.include_router(
-    change_detection_router,
-    prefix="/v1/sync",
-    tags=["Sync"]
-)
-
-# Schema diff router (for schema comparison and migration planning)
-app.include_router(
-    schema_diff_router,
-    prefix="/v1/sync/schema",
-    tags=["Schema Diff"]
-)
-
-# Sync State router (project-level sync state tracking)
-app.include_router(
-    sync_state_router,
-    prefix="/v1/projects/{project_id}/sync",
-    tags=["Sync State"]
-)
-
-# Cloud Sync router (cloud API integration)
-app.include_router(
-    cloud_sync_router,
-    prefix="/v1/projects",
-    tags=["Cloud Sync"]
-)
+# Sync/CDC router (not project-scoped)
+app.include_router(change_detection_router, prefix="/v1/sync", tags=["Sync"])
+app.include_router(schema_diff_router, prefix="/v1/sync/schema", tags=["Schema Diff"])
 
 # Export router (project-level export bundle creation)
 app.include_router(
