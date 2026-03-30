@@ -72,7 +72,7 @@ class TablesService:
         # Create table
         insert_query = text("""
             INSERT INTO tables (project_id, name, schema, description)
-            VALUES (:project_id, :name, :schema::jsonb, :description)
+            VALUES (:project_id, :name, CAST(:schema AS jsonb), :description)
             RETURNING id, name, schema, description, created_at, updated_at
         """)
 
@@ -279,7 +279,7 @@ class TablesService:
         for row_data in rows:
             insert_query = text("""
                 INSERT INTO table_rows (table_id, project_id, data)
-                VALUES (:table_id, :project_id, :data::jsonb)
+                VALUES (:table_id, :project_id, CAST(:data AS jsonb))
                 RETURNING id
             """)
 
@@ -341,7 +341,7 @@ class TablesService:
                 WHERE table_id = :table_id
                 AND project_id = :project_id
                 AND deleted_at IS NULL
-                AND data @> :filter::jsonb
+                AND data @> CAST(:filter AS jsonb)
                 ORDER BY created_at DESC
                 LIMIT :limit OFFSET :offset
             """)
@@ -412,12 +412,12 @@ class TablesService:
         # Update rows using JSONB concatenation operator ||
         update_query = text("""
             UPDATE table_rows
-            SET data = data || :update::jsonb,
+            SET data = data || CAST(:update AS jsonb),
                 updated_at = NOW()
             WHERE table_id = :table_id
             AND project_id = :project_id
             AND deleted_at IS NULL
-            AND data @> :filter::jsonb
+            AND data @> CAST(:filter AS jsonb)
         """)
 
         result = db.execute(
@@ -466,7 +466,7 @@ class TablesService:
             WHERE table_id = :table_id
             AND project_id = :project_id
             AND deleted_at IS NULL
-            AND data @> :filter::jsonb
+            AND data @> CAST(:filter AS jsonb)
         """)
 
         result = db.execute(

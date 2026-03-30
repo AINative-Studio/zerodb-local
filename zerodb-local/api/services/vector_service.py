@@ -2,6 +2,7 @@
 Vector Service
 Handles vector storage and search using PostgreSQL + Qdrant + Local Embeddings
 """
+import json
 import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -80,9 +81,9 @@ class VectorService:
                 # Update existing vector
                 update_query = text("""
                     UPDATE vectors
-                    SET embedding = :embedding::vector,
+                    SET embedding = CAST(:embedding AS vector),
                         document = :document,
-                        metadata = :metadata::jsonb,
+                        metadata = CAST(:metadata AS jsonb),
                         updated_at = NOW()
                     WHERE id = :id
                     RETURNING id, vector_id, document, metadata, created_at, updated_at
@@ -93,7 +94,7 @@ class VectorService:
                         "id": str(existing.id),
                         "embedding": str(embedding),
                         "document": document,
-                        "metadata": str(metadata)
+                        "metadata": json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
                     }
                 ).first()
                 pg_vector_id = str(existing.id)
@@ -101,7 +102,7 @@ class VectorService:
                 # Insert new vector with custom ID
                 insert_query = text("""
                     INSERT INTO vectors (project_id, namespace, vector_id, embedding, document, metadata)
-                    VALUES (:project_id, :namespace, :vector_id, :embedding::vector, :document, :metadata::jsonb)
+                    VALUES (:project_id, :namespace, :vector_id, CAST(:embedding AS vector), :document, CAST(:metadata AS jsonb))
                     RETURNING id, vector_id, document, metadata, created_at, updated_at
                 """)
                 result = db.execute(
@@ -112,7 +113,7 @@ class VectorService:
                         "vector_id": vector_id,
                         "embedding": str(embedding),
                         "document": document,
-                        "metadata": str(metadata)
+                        "metadata": json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
                     }
                 ).first()
                 pg_vector_id = str(result.id)
@@ -120,7 +121,7 @@ class VectorService:
             # Insert new vector (auto-generate ID)
             insert_query = text("""
                 INSERT INTO vectors (project_id, namespace, embedding, document, metadata)
-                VALUES (:project_id, :namespace, :embedding::vector, :document, :metadata::jsonb)
+                VALUES (:project_id, :namespace, CAST(:embedding AS vector), :document, CAST(:metadata AS jsonb))
                 RETURNING id, vector_id, document, metadata, created_at, updated_at
             """)
             result = db.execute(
@@ -130,7 +131,7 @@ class VectorService:
                     "namespace": namespace,
                     "embedding": str(embedding),
                     "document": document,
-                    "metadata": str(metadata)
+                    "metadata": json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
                 }
             ).first()
             pg_vector_id = str(result.id)
