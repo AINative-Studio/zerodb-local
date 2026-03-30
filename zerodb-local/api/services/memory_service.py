@@ -63,7 +63,7 @@ class MemoryService:
         # Step 2: Store in PostgreSQL
         insert_query = text("""
             INSERT INTO memory (project_id, session_id, agent_id, role, content, embedding, metadata)
-            VALUES (:project_id, :session_id, :agent_id, :role, :content, :embedding::vector, :metadata::jsonb)
+            VALUES (:project_id, :session_id, :agent_id, :role, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
             RETURNING id, session_id, agent_id, role, content, metadata, created_at
         """)
 

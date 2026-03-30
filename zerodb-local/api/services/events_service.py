@@ -54,7 +54,7 @@ class EventsService:
         # Step 1: Store in PostgreSQL
         insert_query = text("""
             INSERT INTO events (project_id, event_type, source, correlation_id, event_data)
-            VALUES (:project_id, :event_type, :source, :correlation_id, :event_data::jsonb)
+            VALUES (:project_id, :event_type, :source, :correlation_id, CAST(:event_data AS jsonb))
             RETURNING id, event_type, source, correlation_id, event_data, timestamp
         """)
 

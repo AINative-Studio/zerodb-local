@@ -67,7 +67,7 @@ class FilesService:
         # Step 2: Store metadata in PostgreSQL
         insert_query = text("""
             INSERT INTO files (project_id, file_name, file_path, content_type, file_size, folder, metadata)
-            VALUES (:project_id, :file_name, :file_path, :content_type, :file_size, :folder, :metadata::jsonb)
+            VALUES (:project_id, :file_name, :file_path, :content_type, :file_size, :folder, CAST(:metadata AS jsonb))
             RETURNING id, file_name, file_path, content_type, file_size, folder, metadata, created_at, updated_at
         """)
 

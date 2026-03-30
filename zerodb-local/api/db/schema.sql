@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS vectors (
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     namespace VARCHAR(255) DEFAULT 'default',
     vector_id VARCHAR(512),  -- Optional custom ID
-    embedding vector(1536),  -- OpenAI ada-002 dimensions (configurable)
+    embedding vector(384),  -- Local BGE model dimensions (384 default)
     document TEXT,
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS memory (
     agent_id VARCHAR(255),
     role VARCHAR(50),  -- 'user', 'assistant', 'system'
     content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding vector(384),
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
