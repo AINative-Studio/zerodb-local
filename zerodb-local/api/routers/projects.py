@@ -21,7 +21,48 @@ from auth import get_current_user_flexible, User
 from services.database_service import database_service
 
 
+import json as _json
+
 router = APIRouter()
+
+_PROJECT_COLUMNS = """id, name, description, user_id, organization_id, tier, status,
+    database_enabled, database_config, vector_dimensions,
+    quantum_enabled, mcp_enabled, railway_project_id,
+    created_at, updated_at"""
+
+
+def _row_to_response(row, db=None) -> ProjectResponse:
+    """Convert a DB row to ProjectResponse matching cloud schema"""
+    usage = {"vectors": 0, "tables": 0, "events": 0, "memory": 0, "files": 0}
+    if db:
+        try:
+            stats = db.execute(text("""
+                SELECT
+                    (SELECT COUNT(*) FROM vectors WHERE project_id = :pid) as vectors,
+                    (SELECT COUNT(*) FROM memory WHERE project_id = :pid) as memory,
+                    (SELECT COUNT(*) FROM tables WHERE project_id = :pid AND deleted_at IS NULL) as tables,
+                    (SELECT COUNT(*) FROM files WHERE project_id = :pid AND deleted_at IS NULL) as files,
+                    (SELECT COUNT(*) FROM events WHERE project_id = :pid) as events
+            """), {"pid": str(row.id)}).first()
+            if stats:
+                usage = {"vectors": stats.vectors or 0, "tables": stats.tables or 0,
+                         "events": stats.events or 0, "memory": stats.memory or 0, "files": stats.files or 0}
+        except Exception:
+            pass
+
+    return ProjectResponse(
+        id=row.id, name=row.name, description=row.description,
+        user_id=row.user_id, organization_id=row.organization_id,
+        tier=getattr(row, 'tier', 'free') or 'free',
+        status=getattr(row, 'status', 'ACTIVE') or 'ACTIVE',
+        database_enabled=getattr(row, 'database_enabled', True),
+        database_config=getattr(row, 'database_config', {}) or {},
+        vector_dimensions=getattr(row, 'vector_dimensions', 1536) or 1536,
+        quantum_enabled=getattr(row, 'quantum_enabled', False) or False,
+        mcp_enabled=getattr(row, 'mcp_enabled', False) or False,
+        railway_project_id=getattr(row, 'railway_project_id', None),
+        usage=usage, created_at=row.created_at, updated_at=row.updated_at,
+    )
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -30,69 +71,30 @@ async def create_project(
     current_user: User = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
-    """
-    Create a new project
-
-    **Authentication:** Required
-
-    **Parameters:**
-    - name: Project name (1-255 characters)
-    - description: Optional project description
-    - settings: Optional JSON settings
-
-    **Returns:**
-    - Project object with generated UUID
-    """
-    # Check if project name already exists for this user
+    """Create a new project"""
     check_query = text("""
         SELECT id FROM projects
-        WHERE user_id = :user_id
-        AND name = :name
-        AND deleted_at IS NULL
+        WHERE user_id = :user_id AND name = :name AND deleted_at IS NULL
     """)
-
-    existing = db.execute(
-        check_query,
-        {"user_id": str(current_user.id), "name": project.name}
-    ).first()
-
+    existing = db.execute(check_query, {"user_id": str(current_user.id), "name": project.name}).first()
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Project with name '{project.name}' already exists"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Project with name '{project.name}' already exists")
 
-    # Create project
-    insert_query = text("""
-        INSERT INTO projects (name, description, user_id, organization_id, settings)
-        VALUES (:name, :description, :user_id, :organization_id, CAST(:settings AS jsonb))
-        RETURNING id, name, description, user_id, organization_id, settings, created_at, updated_at
+    insert_query = text(f"""
+        INSERT INTO projects (name, description, user_id, organization_id, tier, settings)
+        VALUES (:name, :description, :user_id, :organization_id, :tier, CAST(:settings AS jsonb))
+        RETURNING {_PROJECT_COLUMNS}
     """)
-
-    import json as _json
-    result = db.execute(
-        insert_query,
-        {
-            "name": project.name,
-            "description": project.description,
-            "user_id": str(current_user.id),
-            "organization_id": str(current_user.organization_id) if hasattr(current_user, 'organization_id') and current_user.organization_id else None,
-            "settings": _json.dumps(project.settings) if project.settings else "{}"
-        }
-    ).first()
-
+    result = db.execute(insert_query, {
+        "name": project.name, "description": project.description,
+        "user_id": str(current_user.id),
+        "organization_id": str(current_user.organization_id) if hasattr(current_user, 'organization_id') and current_user.organization_id else None,
+        "tier": getattr(project, 'tier', 'free') or 'free',
+        "settings": _json.dumps(project.settings) if project.settings else "{}"
+    }).first()
     db.commit()
-
-    return ProjectResponse(
-        id=result.id,
-        name=result.name,
-        description=result.description,
-        user_id=result.user_id,
-        organization_id=result.organization_id,
-        settings=result.settings if result.settings else {},
-        created_at=result.created_at,
-        updated_at=result.updated_at
-    )
+    return _row_to_response(result, db)
 
 
 @router.get("", response_model=List[ProjectResponse])
@@ -102,48 +104,16 @@ async def list_projects(
     current_user: User = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
-    """
-    List all projects for the current user
-
-    **Authentication:** Required
-
-    **Query Parameters:**
-    - skip: Number of projects to skip (pagination)
-    - limit: Maximum number of projects to return (max 100)
-
-    **Returns:**
-    - List of project objects
-    """
+    """List all projects for the current user"""
     if limit > 100:
         limit = 100
-
-    query = text("""
-        SELECT id, name, description, user_id, organization_id, settings, created_at, updated_at
-        FROM projects
-        WHERE user_id = :user_id
-        AND deleted_at IS NULL
-        ORDER BY created_at DESC
-        LIMIT :limit OFFSET :offset
+    query = text(f"""
+        SELECT {_PROJECT_COLUMNS} FROM projects
+        WHERE user_id = :user_id AND deleted_at IS NULL
+        ORDER BY created_at DESC LIMIT :limit OFFSET :offset
     """)
-
-    results = db.execute(
-        query,
-        {"user_id": str(current_user.id), "limit": limit, "offset": skip}
-    ).fetchall()
-
-    return [
-        ProjectResponse(
-            id=row.id,
-            name=row.name,
-            description=row.description,
-            user_id=row.user_id,
-            organization_id=row.organization_id,
-            settings=row.settings if row.settings else {},
-            created_at=row.created_at,
-            updated_at=row.updated_at
-        )
-        for row in results
-    ]
+    results = db.execute(query, {"user_id": str(current_user.id), "limit": limit, "offset": skip}).fetchall()
+    return [_row_to_response(row, db) for row in results]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -163,35 +133,14 @@ async def get_project(
     **Returns:**
     - Project object
     """
-    query = text("""
-        SELECT id, name, description, user_id, organization_id, settings, created_at, updated_at
-        FROM projects
-        WHERE id = :project_id
-        AND user_id = :user_id
-        AND deleted_at IS NULL
+    query = text(f"""
+        SELECT {_PROJECT_COLUMNS} FROM projects
+        WHERE id = :project_id AND user_id = :user_id AND deleted_at IS NULL
     """)
-
-    result = db.execute(
-        query,
-        {"project_id": str(project_id), "user_id": str(current_user.id)}
-    ).first()
-
+    result = db.execute(query, {"project_id": str(project_id), "user_id": str(current_user.id)}).first()
     if not result:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found"
-        )
-
-    return ProjectResponse(
-        id=result.id,
-        name=result.name,
-        description=result.description,
-        user_id=result.user_id,
-        organization_id=result.organization_id,
-        settings=result.settings if result.settings else {},
-        created_at=result.created_at,
-        updated_at=result.updated_at
-    )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return _row_to_response(result, db)
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse)
@@ -264,22 +213,12 @@ async def update_project(
         SET {', '.join(update_fields)}
         WHERE id = :project_id
         AND user_id = :user_id
-        RETURNING id, name, description, user_id, organization_id, settings, created_at, updated_at
+        RETURNING {_PROJECT_COLUMNS}
     """)
 
     result = db.execute(update_query, params).first()
     db.commit()
-
-    return ProjectResponse(
-        id=result.id,
-        name=result.name,
-        description=result.description,
-        user_id=result.user_id,
-        organization_id=result.organization_id,
-        settings=result.settings if result.settings else {},
-        created_at=result.created_at,
-        updated_at=result.updated_at
-    )
+    return _row_to_response(result, db)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

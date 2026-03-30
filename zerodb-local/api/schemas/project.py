@@ -9,34 +9,13 @@ from pydantic import BaseModel, Field
 
 
 class ProjectCreate(BaseModel):
-    """Schema for creating a new project"""
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Project name"
-    )
-    description: Optional[str] = Field(
-        None,
-        max_length=1000,
-        description="Project description"
-    )
-    settings: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Project settings (JSON)"
-    )
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "name": "my-ai-project",
-                "description": "My first AI project with ZeroDB Local",
-                "settings": {
-                    "embeddings_model": "bge-small-en-v1.5",
-                    "vector_dimensions": 384
-                }
-            }
-        }
+    """Schema for creating a new project — matches cloud API"""
+    name: str = Field(..., min_length=1, max_length=255, description="Project name")
+    description: Optional[str] = Field(None, max_length=1000, description="Project description")
+    tier: str = Field(default="free", description="Project tier")
+    database_enabled: bool = Field(default=True, description="Enable database features")
+    organization_id: Optional[str] = Field(None, description="Organization ID")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="Project settings (JSON)")
 
 
 class ProjectUpdate(BaseModel):
@@ -59,30 +38,28 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectResponse(BaseModel):
-    """Schema for project response"""
+    """Schema for project response — matches cloud API schema"""
     id: UUID
     name: str
-    description: Optional[str]
+    description: Optional[str] = None
     user_id: UUID
-    organization_id: Optional[UUID]
-    settings: Dict[str, Any]
+    organization_id: Optional[UUID] = None
+    tier: str = "free"
+    status: str = "ACTIVE"
+    database_enabled: bool = True
+    database_config: Dict[str, Any] = Field(default_factory=dict)
+    vector_dimensions: int = 1536
+    quantum_enabled: bool = False
+    mcp_enabled: bool = False
+    railway_project_id: Optional[str] = None
+    usage: Dict[str, Any] = Field(default_factory=lambda: {
+        "vectors": 0, "tables": 0, "events": 0, "memory": 0, "files": 0
+    })
     created_at: datetime
     updated_at: datetime
 
     class Config:
-        from_attributes = True  # Pydantic v2
-        json_schema_extra = {
-            "example": {
-                "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                "name": "my-ai-project",
-                "description": "My first AI project",
-                "user_id": "user-123",
-                "organization_id": None,
-                "settings": {},
-                "created_at": "2025-12-28T12:00:00Z",
-                "updated_at": "2025-12-28T12:00:00Z"
-            }
-        }
+        from_attributes = True
 
 
 class ProjectStats(BaseModel):
