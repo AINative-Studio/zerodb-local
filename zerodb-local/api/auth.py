@@ -84,7 +84,7 @@ async def get_current_user(
     # Local-only mode (offline development)
     if AUTH_MODE == "local":
         return User(
-            id="local-user",
+            id=os.getenv("ZERODB_USER_ID", "00000000-0000-0000-0000-000000000001"),
             email=os.getenv("ZERODB_USER_EMAIL", "dev@localhost"),
             username=os.getenv("ZERODB_USERNAME", "local-developer")
         )
@@ -117,3 +117,15 @@ async def get_current_user(
 
 # Alias for compatibility
 get_user = get_current_user
+
+
+# Alias matching cloud backend's dependency name (used by all routers)
+async def get_current_user_flexible(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Flexible auth compatible with cloud backend's get_current_user_flexible.
+    All zerodb-local routers use this as their auth dependency.
+    """
+    return await get_current_user(credentials=credentials, db=db)

@@ -15,24 +15,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectStats
 
-# Import authentication from core backend (when available)
-try:
-    from app.api.deps import get_current_user_flexible
-    from app.models.user import User
-except ImportError:
-    # Fallback for isolated testing
-    print("Warning: Core authentication not available. Using mock auth for development.")
-    class MockUser:
-        def __init__(self):
-            self.id = "00000000-0000-0000-0000-000000000001"
-            self.email = "dev@localhost"
-            self.organization_id = None
-
-    # Use MockUser as User for type annotations
-    User = MockUser
-
-    def get_current_user_flexible():
-        return lambda: MockUser()
+from auth import get_current_user_flexible, User
 
 # Import database service
 from services.database_service import database_service
@@ -82,10 +65,11 @@ async def create_project(
     # Create project
     insert_query = text("""
         INSERT INTO projects (name, description, user_id, organization_id, settings)
-        VALUES (:name, :description, :user_id, :organization_id, :settings::jsonb)
+        VALUES (:name, :description, :user_id, :organization_id, CAST(:settings AS jsonb))
         RETURNING id, name, description, user_id, organization_id, settings, created_at, updated_at
     """)
 
+    import json as _json
     result = db.execute(
         insert_query,
         {
@@ -93,7 +77,7 @@ async def create_project(
             "description": project.description,
             "user_id": str(current_user.id),
             "organization_id": str(current_user.organization_id) if hasattr(current_user, 'organization_id') and current_user.organization_id else None,
-            "settings": str(project.settings) if project.settings else "{}"
+            "settings": _json.dumps(project.settings) if project.settings else "{}"
         }
     ).first()
 
@@ -265,8 +249,9 @@ async def update_project(
         params["description"] = project.description
 
     if project.settings is not None:
-        update_fields.append("settings = :settings::jsonb")
-        params["settings"] = str(project.settings)
+        update_fields.append("settings = CAST(:settings AS jsonb)")
+        import json as _json
+        params["settings"] = _json.dumps(project.settings)
 
     if not update_fields:
         # No fields to update, just return current project

@@ -23,22 +23,7 @@ from services.sync_state_service import SyncStateService
 from services.database_service import database_service
 
 # Import authentication (when available)
-try:
-    from app.api.deps import get_current_user_flexible
-    from app.models.user import User
-except ImportError:
-    # Fallback for isolated testing
-    class MockUser:
-        def __init__(self):
-            self.id = "00000000-0000-0000-0000-000000000001"
-            self.email = "dev@localhost"
-
-    User = MockUser
-
-    def get_current_user_flexible():
-        return lambda: MockUser()
-
-
+from auth import get_current_user_flexible, User
 router = APIRouter()
 
 
