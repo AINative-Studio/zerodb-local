@@ -90,7 +90,7 @@ class MemoryService:
             project_id=project_id,
             vector_id=qdrant_id,
             embedding=embedding,
-            metadata={
+            payload={
                 **(metadata or {}),
                 "content": content,
                 "role": role,
