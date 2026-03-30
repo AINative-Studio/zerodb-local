@@ -36,14 +36,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_cloud_client_instance: CloudAPIClient = None
+
+
 def get_cloud_client() -> CloudAPIClient:
     """
-    Dependency to get CloudAPIClient instance
-
-    Returns:
-        CloudAPIClient instance
+    Dependency to get shared CloudAPIClient instance.
+    Singleton so auth token persists between requests.
     """
-    return CloudAPIClient()
+    global _cloud_client_instance
+    if _cloud_client_instance is None:
+        _cloud_client_instance = CloudAPIClient()
+    return _cloud_client_instance
 
 
 @router.post(
