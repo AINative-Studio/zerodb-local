@@ -2,6 +2,7 @@
 Memory Service
 Handles agent memory storage and retrieval using PostgreSQL + Qdrant + Local Embeddings
 """
+import json
 import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -76,7 +77,7 @@ class MemoryService:
                 "role": role,
                 "content": content,
                 "embedding": str(embedding),
-                "metadata": str(metadata or {})
+                "metadata": json.dumps(metadata or {})
             }
         ).first()
 

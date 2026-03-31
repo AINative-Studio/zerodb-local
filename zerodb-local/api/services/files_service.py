@@ -2,6 +2,7 @@
 Files Service
 Handles file storage using PostgreSQL (metadata) + MinIO (object storage)
 """
+import json
 import os
 import base64
 from typing import List, Dict, Any, Optional
@@ -80,7 +81,7 @@ class FilesService:
                 "content_type": content_type,
                 "file_size": file_size,
                 "folder": folder,
-                "metadata": str(metadata or {})
+                "metadata": json.dumps(metadata or {})
             }
         ).first()
 
