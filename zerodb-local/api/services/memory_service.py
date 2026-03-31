@@ -147,43 +147,40 @@ class MemoryService:
         embeddings = await embeddings_service.generate_embeddings([query])
         query_embedding = embeddings[0]
 
-        # Search Qdrant
+        # Search Qdrant — filter by type=memory at the Qdrant level
         results = await qdrant_service.search_vectors(
             project_id=project_id,
             query_vector=query_embedding,
             limit=limit * 2,  # Get more results for filtering
-            threshold=threshold
+            threshold=threshold,
+            filter_metadata={"type": "memory"}
         )
 
         # Filter by metadata
+        # Note: qdrant_service returns {"id", "score", "payload"} — key is "payload" not "metadata"
         filtered_results = []
         for result in results:
-            metadata = result.get("metadata", {})
+            payload = result.get("payload", {})
 
             # Skip non-memory entries
-            if metadata.get("type") != "memory":
+            if payload.get("type") != "memory":
                 continue
 
-            # Check agent_id filter
-            if agent_id and metadata.get("agent_id") != agent_id:
+            if agent_id and payload.get("agent_id") != agent_id:
                 continue
-
-            # Check session_id filter
-            if session_id and metadata.get("session_id") != session_id:
+            if session_id and payload.get("session_id") != session_id:
                 continue
-
-            # Check role filter
-            if role and metadata.get("role") != role:
+            if role and payload.get("role") != role:
                 continue
 
             filtered_results.append({
-                "id": metadata.get("pg_id"),
-                "session_id": metadata.get("session_id"),
-                "agent_id": metadata.get("agent_id"),
-                "role": metadata.get("role"),
-                "content": metadata.get("content"),
-                "metadata": {k: v for k, v in metadata.items()
-                           if k not in ["content", "role", "agent_id", "session_id", "pg_id", "type"]},
+                "id": payload.get("pg_id"),
+                "session_id": payload.get("session_id"),
+                "agent_id": payload.get("agent_id"),
+                "role": payload.get("role"),
+                "content": payload.get("content"),
+                "metadata": {k: v for k, v in payload.items()
+                           if k not in ["content", "role", "agent_id", "session_id", "pg_id", "type", "project_id", "namespace", "vector_id"]},
                 "score": result.get("score")
             })
 

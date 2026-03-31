@@ -145,12 +145,13 @@ class VectorService:
             project_id=project_id,
             vector_id=qdrant_id,
             embedding=embedding,
-            metadata={
+            payload={
                 **metadata,
                 "document": document,
                 "namespace": namespace,
                 "pg_id": pg_vector_id
-            }
+            },
+            namespace=namespace
         )
 
         return {
@@ -203,33 +204,33 @@ class VectorService:
             project_id=project_id,
             query_vector=query_embedding,
             limit=limit,
-            threshold=threshold
+            threshold=threshold,
+            namespace=namespace
         )
 
         # Filter by namespace and metadata if needed
+        # Note: qdrant_service returns {"id", "score", "payload"} — key is "payload" not "metadata"
         filtered_results = []
         for result in results:
-            # Check namespace
-            if namespace and result.get("metadata", {}).get("namespace") != namespace:
+            payload = result.get("payload", {})
+
+            # Check namespace (already filtered at Qdrant level, but double-check)
+            if namespace and payload.get("namespace") != namespace:
                 continue
 
             # Check metadata filters
             if filter_metadata:
-                matches = all(
-                    result.get("metadata", {}).get(k) == v
-                    for k, v in filter_metadata.items()
-                )
-                if not matches:
+                if not all(payload.get(k) == v for k, v in filter_metadata.items()):
                     continue
 
             filtered_results.append({
-                "id": result.get("metadata", {}).get("pg_id"),
-                "vector_id": result.get("id", "").split("_")[-1],
-                "document": result.get("metadata", {}).get("document"),
-                "metadata": {k: v for k, v in result.get("metadata", {}).items()
-                           if k not in ["document", "namespace", "pg_id"]},
+                "id": payload.get("pg_id"),
+                "vector_id": result.get("id", ""),
+                "document": payload.get("document"),
+                "metadata": {k: v for k, v in payload.items()
+                           if k not in ["document", "namespace", "pg_id", "project_id", "vector_id"]},
                 "score": result.get("score"),
-                "namespace": result.get("metadata", {}).get("namespace")
+                "namespace": payload.get("namespace")
             })
 
         return filtered_results[:limit]

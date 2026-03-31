@@ -284,6 +284,22 @@ async def list_vectors(
         )
 
 
+@router.get("/stats", response_model=VectorStats)
+async def get_vector_stats(
+    project_id: UUID,
+    namespace: Optional[str] = None,
+    current_user = Depends(get_current_user_flexible),
+    db: Session = Depends(database_service.get_db)
+):
+    """Get vector statistics for a project"""
+    try:
+        stats = await vector_service.get_stats(db=db, project_id=project_id, namespace=namespace)
+        return VectorStats(**stats)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Error retrieving vector stats: {str(e)}")
+
+
 @router.get("/{vector_id}", response_model=VectorResponse)
 async def get_vector(
     project_id: UUID,
@@ -371,37 +387,4 @@ async def delete_vector(
         )
 
 
-@router.get("/stats", response_model=VectorStats)
-async def get_vector_stats(
-    project_id: UUID,
-    namespace: Optional[str] = None,
-    current_user = Depends(get_current_user_flexible),
-    db: Session = Depends(database_service.get_db)
-):
-    """
-    Get vector statistics for a project
-
-    **Authentication:** Required
-
-    **Query Parameters:**
-    - namespace: Optional namespace filter
-
-    **Returns:**
-    - total_vectors: Total count
-    - namespace_count: Number of unique namespaces
-    - dimensions: Vector dimensions
-    """
-    try:
-        stats = await vector_service.get_stats(
-            db=db,
-            project_id=project_id,
-            namespace=namespace
-        )
-
-        return VectorStats(**stats)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving vector stats: {str(e)}"
-        )
+    # /stats route defined above /{vector_id} to prevent path collision
