@@ -161,12 +161,12 @@ services:
       REDPANDA_URL: redpanda:29092
       EMBEDDINGS_URL: http://embeddings:8001
 
-      # Cloud API (for sync)
+      # Cloud API (for sync and auth)
       CLOUD_API_URL: ${CLOUD_API_URL:-https://api.ainative.studio}
       CLOUD_API_KEY: ${CLOUD_API_KEY:-}
 
-      # Authentication
-      ZERODB_AUTH_MODE: ${ZERODB_AUTH_MODE:-local}  # "local" or "cloud"
+      # Authentication — "cloud" syncs with your AINative account, "local" for offline dev
+      ZERODB_AUTH_MODE: ${ZERODB_AUTH_MODE:-cloud}
 
       # Environment
       ZERODB_ENV: ${ZERODB_ENV:-local}
