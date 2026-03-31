@@ -2,6 +2,7 @@
 Events Service
 Handles event storage and streaming using PostgreSQL + RedPanda
 """
+import json
 import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -65,7 +66,7 @@ class EventsService:
                 "event_type": event_type,
                 "source": source,
                 "correlation_id": correlation_id,
-                "event_data": str(event_data)
+                "event_data": json.dumps(event_data) if event_data else "{}"
             }
         ).first()
 
