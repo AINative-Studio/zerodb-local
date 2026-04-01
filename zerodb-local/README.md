@@ -403,6 +403,62 @@ See `.env.local.example` for complete list. Key variables:
 - **Sync Strategy**: [docs/SYNC_STRATEGY.md](./docs/SYNC_STRATEGY.md) - Cloud sync configuration
 - **API Reference**: http://localhost:8000/docs - Interactive API documentation
 
+## Port Configuration
+
+All external port mappings in `docker-compose.yml` are configurable via environment variables. Each defaults to the standard port if unset.
+
+| Service | Default Port | Environment Variable |
+|---------|-------------|---------------------|
+| PostgreSQL | 5432 | `ZERODB_POSTGRES_PORT` |
+| Qdrant REST | 6333 | `ZERODB_QDRANT_REST_PORT` |
+| Qdrant gRPC | 6334 | `ZERODB_QDRANT_GRPC_PORT` |
+| MinIO API | 9000 | `ZERODB_MINIO_API_PORT` |
+| MinIO Console | 9001 | `ZERODB_MINIO_CONSOLE_PORT` |
+| RedPanda Kafka | 9092 | `ZERODB_REDPANDA_KAFKA_PORT` |
+| RedPanda HTTP Proxy | 8082 | `ZERODB_REDPANDA_PROXY_PORT` |
+| RedPanda Admin | 9644 | `ZERODB_REDPANDA_ADMIN_PORT` |
+| Embeddings | 8001 | `ZERODB_EMBEDDINGS_PORT` |
+| API Server | 8000 | `ZERODB_API_PORT` |
+| Dashboard | 3000 | `ZERODB_DASHBOARD_PORT` |
+
+### Remapping Ports
+
+Set variables in your `.env.local` file or pass them directly:
+
+```bash
+# Via .env.local
+ZERODB_API_PORT=8080
+ZERODB_DASHBOARD_PORT=3001
+ZERODB_POSTGRES_PORT=5433
+
+# Or inline
+ZERODB_API_PORT=8080 docker-compose up -d
+```
+
+### Using docker-compose.override.yml
+
+For persistent local overrides without modifying tracked files, create a `docker-compose.override.yml`:
+
+```yaml
+version: '3.8'
+services:
+  zerodb-api:
+    ports:
+      - "8080:8000"
+  dashboard:
+    ports:
+      - "3001:3000"
+  postgres:
+    ports:
+      - "5433:5432"
+```
+
+Docker Compose automatically merges this file with `docker-compose.yml` on every `docker-compose up`.
+
+### Port Conflict Detection
+
+The `port-config.json` file in this directory describes all service ports and their env vars. It can be consumed by the port-management skill or any automation tool to detect conflicts before starting the stack.
+
 ## Support
 
 - **GitHub Issues**: https://github.com/AINative-Studio/core/issues

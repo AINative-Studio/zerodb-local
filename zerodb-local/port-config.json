@@ -1,0 +1,82 @@
+{
+  "project_name": "ZeroDB Local",
+  "services": [
+    {
+      "name": "PostgreSQL",
+      "port": 5432,
+      "env_var": "ZERODB_POSTGRES_PORT",
+      "health_check": "pg_isready -h localhost -p {port}",
+      "can_reassign": true
+    },
+    {
+      "name": "Qdrant REST",
+      "port": 6333,
+      "env_var": "ZERODB_QDRANT_REST_PORT",
+      "health_check": "http://localhost:{port}/healthz",
+      "can_reassign": true
+    },
+    {
+      "name": "Qdrant gRPC",
+      "port": 6334,
+      "env_var": "ZERODB_QDRANT_GRPC_PORT",
+      "health_check": null,
+      "can_reassign": true
+    },
+    {
+      "name": "MinIO API",
+      "port": 9000,
+      "env_var": "ZERODB_MINIO_API_PORT",
+      "health_check": "http://localhost:{port}/minio/health/live",
+      "can_reassign": true
+    },
+    {
+      "name": "MinIO Console",
+      "port": 9001,
+      "env_var": "ZERODB_MINIO_CONSOLE_PORT",
+      "health_check": null,
+      "can_reassign": true
+    },
+    {
+      "name": "RedPanda Kafka",
+      "port": 9092,
+      "env_var": "ZERODB_REDPANDA_KAFKA_PORT",
+      "health_check": null,
+      "can_reassign": true
+    },
+    {
+      "name": "RedPanda HTTP Proxy",
+      "port": 8082,
+      "env_var": "ZERODB_REDPANDA_PROXY_PORT",
+      "health_check": null,
+      "can_reassign": true
+    },
+    {
+      "name": "RedPanda Admin",
+      "port": 9644,
+      "env_var": "ZERODB_REDPANDA_ADMIN_PORT",
+      "health_check": "http://localhost:{port}/v1/status/ready",
+      "can_reassign": true
+    },
+    {
+      "name": "Embeddings",
+      "port": 8001,
+      "env_var": "ZERODB_EMBEDDINGS_PORT",
+      "health_check": "http://localhost:{port}/health",
+      "can_reassign": true
+    },
+    {
+      "name": "API",
+      "port": 8000,
+      "env_var": "ZERODB_API_PORT",
+      "health_check": "http://localhost:{port}/health",
+      "can_reassign": true
+    },
+    {
+      "name": "Dashboard",
+      "port": 3000,
+      "env_var": "ZERODB_DASHBOARD_PORT",
+      "health_check": "http://localhost:{port}",
+      "can_reassign": true
+    }
+  ]
+}
