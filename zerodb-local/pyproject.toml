@@ -62,11 +62,16 @@ Repository = "https://github.com/AINative-Studio/core"
 Issues = "https://github.com/AINative-Studio/core/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["zerodb_local"]
+packages = ["zerodb_local", "api", "lite", "cli"]
+
+[tool.hatch.build.targets.wheel.shared-data]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "zerodb_local/",
+    "api/",
+    "lite/",
+    "cli/",
     "README.md",
     "LICENSE",
     "pyproject.toml",
