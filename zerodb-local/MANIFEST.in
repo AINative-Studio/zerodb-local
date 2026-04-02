@@ -1,0 +1,16 @@
+include LICENSE
+include README.md
+include pyproject.toml
+
+recursive-include zerodb_local *.py
+recursive-include api/db/migrations *.sql
+recursive-include api/db *.sql
+
+prune build
+prune dist
+prune fresh_install
+prune test_cli_venv
+prune data
+prune dashboard
+prune docs
+prune scripts
