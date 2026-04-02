@@ -1,0 +1,1 @@
+macOS ICNS: run 'npx @tauri-apps/cli icon icon.png' to generate icon.icns from icon.png

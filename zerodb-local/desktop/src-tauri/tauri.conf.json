@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ZeroDB",
+  "version": "0.2.0",
+  "identifier": "studio.ainative.zerodb",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ZeroDB",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:8000 ws://localhost:8000; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "binaries/*"
+    ],
+    "externalBin": [
+      "binaries/zerodb-server"
+    ],
+    "windows": {
+      "wix": {},
+      "nsis": {}
+    },
+    "macOS": {
+      "dmg": {}
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "ZeroDB Local — vector database for your machine",
+    "longDescription": "ZeroDB Local runs a full vector database and REST API on your local machine. Manage tables, embeddings, and files from a built-in dashboard."
+  }
+}
