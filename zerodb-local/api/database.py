@@ -1,9 +1,7 @@
 """
 Database Configuration
 SQLAlchemy database setup and session management.
-
-Supports both PostgreSQL (full mode) and SQLite (lite mode)
-based on the ZERODB_BACKEND environment variable.
+Supports both PostgreSQL (full mode) and SQLite (lite mode).
 """
 import os
 from sqlalchemy import create_engine
@@ -15,7 +13,7 @@ from lite.config import is_lite_mode, get_data_path
 
 # Select database URL based on backend mode
 if is_lite_mode():
-    _db_path = get_data_path("zerodb.db")
+    _db_path = get_data_path("zerodb.db", is_dir=False)
     DATABASE_URL = f"sqlite:///{_db_path}"
     engine = create_engine(
         DATABASE_URL,

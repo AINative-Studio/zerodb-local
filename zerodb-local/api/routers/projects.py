@@ -50,16 +50,24 @@ def _row_to_response(row, db=None) -> ProjectResponse:
         except Exception:
             pass
 
+    # Handle database_config: may be JSON string (SQLite) or dict (PostgreSQL)
+    db_config = getattr(row, 'database_config', {}) or {}
+    if isinstance(db_config, str):
+        try:
+            db_config = _json.loads(db_config)
+        except (ValueError, TypeError):
+            db_config = {}
+
     return ProjectResponse(
-        id=row.id, name=row.name, description=row.description,
-        user_id=row.user_id, organization_id=row.organization_id,
+        id=str(row.id), name=row.name, description=row.description,
+        user_id=str(row.user_id), organization_id=str(row.organization_id) if row.organization_id else None,
         tier=getattr(row, 'tier', 'free') or 'free',
         status=getattr(row, 'status', 'ACTIVE') or 'ACTIVE',
-        database_enabled=getattr(row, 'database_enabled', True),
-        database_config=getattr(row, 'database_config', {}) or {},
+        database_enabled=bool(getattr(row, 'database_enabled', True)),
+        database_config=db_config,
         vector_dimensions=getattr(row, 'vector_dimensions', 1536) or 1536,
-        quantum_enabled=getattr(row, 'quantum_enabled', False) or False,
-        mcp_enabled=getattr(row, 'mcp_enabled', False) or False,
+        quantum_enabled=bool(getattr(row, 'quantum_enabled', False)),
+        mcp_enabled=bool(getattr(row, 'mcp_enabled', False)),
         railway_project_id=getattr(row, 'railway_project_id', None),
         usage=usage, created_at=row.created_at, updated_at=row.updated_at,
     )
@@ -81,19 +89,42 @@ async def create_project(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Project with name '{project.name}' already exists")
 
-    insert_query = text(f"""
-        INSERT INTO projects (name, description, user_id, organization_id, tier, settings)
-        VALUES (:name, :description, :user_id, :organization_id, :tier, CAST(:settings AS jsonb))
-        RETURNING {_PROJECT_COLUMNS}
-    """)
-    result = db.execute(insert_query, {
-        "name": project.name, "description": project.description,
-        "user_id": str(current_user.id),
-        "organization_id": str(current_user.organization_id) if hasattr(current_user, 'organization_id') and current_user.organization_id else None,
-        "tier": getattr(project, 'tier', 'free') or 'free',
-        "settings": _json.dumps(project.settings) if project.settings else "{}"
-    }).first()
-    db.commit()
+    _is_sqlite = "sqlite" in str(db.bind.url)
+    if _is_sqlite:
+        import uuid as _uuid
+        project_id = str(_uuid.uuid4())
+        insert_query = text("""
+            INSERT INTO projects (id, name, description, user_id, organization_id, tier, settings, database_config)
+            VALUES (:id, :name, :description, :user_id, :organization_id, :tier, :settings, :database_config)
+        """)
+        db.execute(insert_query, {
+            "id": project_id,
+            "name": project.name, "description": project.description,
+            "user_id": str(current_user.id),
+            "organization_id": str(current_user.organization_id) if hasattr(current_user, 'organization_id') and current_user.organization_id else None,
+            "tier": getattr(project, 'tier', 'free') or 'free',
+            "settings": _json.dumps(project.settings) if project.settings else "{}",
+            "database_config": _json.dumps({"vector_dimensions": 1536}),
+        })
+        db.commit()
+        result = db.execute(
+            text(f"SELECT {_PROJECT_COLUMNS} FROM projects WHERE id = :id"),
+            {"id": project_id}
+        ).first()
+    else:
+        insert_query = text(f"""
+            INSERT INTO projects (name, description, user_id, organization_id, tier, settings)
+            VALUES (:name, :description, :user_id, :organization_id, :tier, CAST(:settings AS jsonb))
+            RETURNING {_PROJECT_COLUMNS}
+        """)
+        result = db.execute(insert_query, {
+            "name": project.name, "description": project.description,
+            "user_id": str(current_user.id),
+            "organization_id": str(current_user.organization_id) if hasattr(current_user, 'organization_id') and current_user.organization_id else None,
+            "tier": getattr(project, 'tier', 'free') or 'free',
+            "settings": _json.dumps(project.settings) if project.settings else "{}"
+        }).first()
+        db.commit()
     return _row_to_response(result, db)
 
 
