@@ -22,7 +22,7 @@ from zerodb.commands.logs import app as logs_app
 from zerodb.commands.dashboard import app as dashboard_app
 
 # Import existing commands
-from commands import sync, local, cloud, env, inspect, schema
+from commands import sync, local, cloud, env, inspect, schema, serve
 
 # Import branding
 from zerodb.utils.branding import print_logo
@@ -48,6 +48,7 @@ app.add_typer(cloud.app, name="cloud", help="Interact with ZeroDB Cloud")
 app.add_typer(env.app, name="env", help="Manage environments")
 app.add_typer(inspect.app, name="inspect", help="Inspect local database state")
 app.add_typer(schema.app, name="schema", help="Generate Pydantic models from table schemas")
+app.add_typer(serve.app, name="serve", help="Start local ZeroDB server")
 
 
 @app.command()
@@ -63,6 +64,7 @@ def version():
     console.print("  • [green]zerodb sync[/green] - Sync with cloud")
     console.print("  • [green]zerodb cloud[/green] - Cloud authentication")
     console.print("  • [green]zerodb schema[/green] - Generate Pydantic models from tables")
+    console.print("  • [green]zerodb serve[/green] - Start local server")
 
 
 if __name__ == "__main__":
