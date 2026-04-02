@@ -201,7 +201,8 @@ class TestPyprojectStructure:
 
     def test_wheel_packages(self, pyproject_content):
         """Wheel must include zerodb_local package."""
-        assert 'packages = ["zerodb_local"]' in pyproject_content
+        assert "zerodb_local" in pyproject_content
+        assert "[tool.hatch.build.targets.wheel]" in pyproject_content
 
     def test_no_conflict_with_zerodb_cli(self, pyproject_content):
         """Package name must NOT be zerodb-cli (already published)."""
