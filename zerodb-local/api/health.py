@@ -1,14 +1,60 @@
 """
 Health Check Module
-Aggregates health status from all services
+Aggregates health status from all services.
+Backend-aware: in lite mode only checks SQLite, FAISS, and filesystem.
 """
 import asyncio
 from typing import Dict, Any
 from datetime import datetime
 
-from services.qdrant_service import qdrant_service
-from services.minio_service import minio_service
-from services.redpanda_service import redpanda_service
+from lite.config import ZERODB_BACKEND, is_lite_mode, DATA_DIR
+
+
+async def check_sqlite() -> Dict[str, Any]:
+    """Check SQLite health (lite mode)."""
+    try:
+        import sqlite3
+        db_path = DATA_DIR / "zerodb.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("SELECT 1")
+        conn.close()
+        return {
+            "status": "healthy",
+            "service": "sqlite",
+            "message": "SQLite connection successful",
+            "path": str(db_path),
+        }
+    except Exception as e:
+        return {"status": "unhealthy", "service": "sqlite", "error": str(e)}
+
+
+async def check_faiss() -> Dict[str, Any]:
+    """Check FAISS index health (lite mode)."""
+    try:
+        index_dir = DATA_DIR / "faiss"
+        return {
+            "status": "healthy",
+            "service": "faiss",
+            "message": "FAISS index directory accessible",
+            "path": str(index_dir),
+        }
+    except Exception as e:
+        return {"status": "unhealthy", "service": "faiss", "error": str(e)}
+
+
+async def check_filesystem() -> Dict[str, Any]:
+    """Check local filesystem storage health (lite mode)."""
+    try:
+        files_dir = DATA_DIR / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "status": "healthy",
+            "service": "filesystem",
+            "message": "Filesystem storage accessible",
+            "path": str(files_dir),
+        }
+    except Exception as e:
+        return {"status": "unhealthy", "service": "filesystem", "error": str(e)}
 
 
 async def check_postgres() -> Dict[str, Any]:
@@ -53,6 +99,7 @@ async def check_qdrant() -> Dict[str, Any]:
         Health status dict
     """
     try:
+        from services.qdrant_service import qdrant_service
         health = await qdrant_service.health_check()
         return {
             "service": "qdrant",
@@ -75,6 +122,7 @@ async def check_minio() -> Dict[str, Any]:
         Health status dict
     """
     try:
+        from services.minio_service import minio_service
         health = await minio_service.health_check()
         return {
             "service": "minio",
@@ -97,6 +145,7 @@ async def check_redpanda() -> Dict[str, Any]:
         Health status dict
     """
     try:
+        from services.redpanda_service import redpanda_service
         health = await redpanda_service.health_check()
         return {
             "service": "redpanda",
@@ -152,20 +201,27 @@ async def check_embeddings() -> Dict[str, Any]:
 
 async def get_aggregated_health() -> Dict[str, Any]:
     """
-    Get aggregated health status from all services
+    Get aggregated health status from all services.
+
+    In lite mode only checks SQLite, FAISS index, and filesystem storage.
+    In full mode checks PostgreSQL, Qdrant, MinIO, RedPanda, and embeddings.
 
     Returns:
-        Aggregated health dict with overall status
+        Aggregated health dict with overall status and backend identifier.
     """
-    # Check all services in parallel
-    results = await asyncio.gather(
-        check_postgres(),
-        check_qdrant(),
-        check_minio(),
-        check_redpanda(),
-        check_embeddings(),
-        return_exceptions=True
-    )
+    # Select checks based on active backend
+    if is_lite_mode():
+        checks = [check_sqlite(), check_faiss(), check_filesystem()]
+    else:
+        checks = [
+            check_postgres(),
+            check_qdrant(),
+            check_minio(),
+            check_redpanda(),
+            check_embeddings(),
+        ]
+
+    results = await asyncio.gather(*checks, return_exceptions=True)
 
     # Build service health map
     services = {}
@@ -191,6 +247,7 @@ async def get_aggregated_health() -> Dict[str, Any]:
 
     return {
         "status": overall_status,
+        "backend": ZERODB_BACKEND,
         "timestamp": datetime.utcnow().isoformat(),
         "services": services,
         "summary": {

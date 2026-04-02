@@ -34,6 +34,9 @@ from routers.conflict_resolution import router as conflict_resolution_router
 from routers.pull_sync import router as pull_sync_router
 from routers.sync_history import router as sync_history_router
 
+# Backend selector
+from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode
+
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
@@ -49,8 +52,10 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     print("=" * 60)
-    print("ZeroDB Local API - Starting")
+    print(f"Starting ZeroDB Local in {ZERODB_BACKEND} mode")
     print("=" * 60)
+    print(f"Backend: {ZERODB_BACKEND}")
+    print(f"Data directory: {DATA_DIR}")
     print(f"Debug mode: {DEBUG}")
     print(f"Log level: {LOG_LEVEL}")
     print(f"CORS origins: {CORS_ORIGINS}")
