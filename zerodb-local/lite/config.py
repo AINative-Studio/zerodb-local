@@ -60,16 +60,20 @@ def is_full_mode() -> bool:
     return ZERODB_BACKEND == "full"
 
 
-def get_data_path(subpath: str) -> Path:
+def get_data_path(subpath: str, is_dir: bool = True) -> Path:
     """
     Resolve a path under DATA_DIR, creating intermediate directories on demand.
 
     Args:
-        subpath: Relative path under the data directory (e.g. "collections/default").
+        subpath: Relative path under the data directory (e.g. "collections/default" or "zerodb.db").
+        is_dir: If True, create the path as a directory. If False, create only parent dirs (for files).
 
     Returns:
         Absolute Path with all parent directories created.
     """
     target = DATA_DIR / subpath
-    target.mkdir(parents=True, exist_ok=True)
+    if is_dir:
+        target.mkdir(parents=True, exist_ok=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
     return target

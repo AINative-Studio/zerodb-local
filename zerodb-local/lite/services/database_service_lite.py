@@ -22,8 +22,8 @@ from sqlalchemy.pool import StaticPool
 from lite.services.cdc_service import CDCService
 
 
-# Default data directory: ~/.zerodb/data/
-DEFAULT_DATA_DIR = os.path.join(pathlib.Path.home(), ".zerodb", "data")
+# Default data directory: use ZERODB_DATA_DIR if set, else ~/.zerodb/data/
+DEFAULT_DATA_DIR = os.getenv("ZERODB_DATA_DIR", os.path.join(pathlib.Path.home(), ".zerodb", "data"))
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DATA_DIR, "zerodb.db")
 
 SCHEMA_FILE = os.path.join(
