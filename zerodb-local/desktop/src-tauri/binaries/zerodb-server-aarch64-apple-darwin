@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "zerodb-server stub — replace with PyInstaller binary before shipping"
+exec python3 -m uvicorn api.main:app --host 127.0.0.1 --port 8000 "$@"
