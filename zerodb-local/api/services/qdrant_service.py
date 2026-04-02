@@ -9,16 +9,21 @@ import uuid
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    VectorParams,
-    Distance,
-    PointStruct,
-    Filter,
-    FieldCondition,
-    MatchValue,
-)
-from qdrant_client.http.exceptions import UnexpectedResponse
+# Defer heavy imports — in lite mode, qdrant_client is not installed
+try:
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import (
+        VectorParams,
+        Distance,
+        PointStruct,
+        Filter,
+        FieldCondition,
+        MatchValue,
+    )
+    from qdrant_client.http.exceptions import UnexpectedResponse
+    _QDRANT_AVAILABLE = True
+except ImportError:
+    _QDRANT_AVAILABLE = False
 
 
 class QdrantService:
@@ -31,7 +36,10 @@ class QdrantService:
         self.default_collection = "zerodb_local"
         self._initialized_collections: set = set()
 
-        if not self.testing:
+        if not _QDRANT_AVAILABLE:
+            from unittest.mock import MagicMock
+            self.client = MagicMock()
+        elif not self.testing:
             self.client = QdrantClient(url=self.url)
         else:
             from unittest.mock import MagicMock
@@ -383,4 +391,14 @@ class QdrantService:
 
 
 # Global instance
-qdrant_service = QdrantService()
+def _create_qdrant_service():
+    try:
+        from lite.config import is_lite_mode
+        if is_lite_mode():
+            from lite.services.faiss_service import FAISSService
+            return FAISSService()
+    except ImportError:
+        pass
+    return QdrantService()
+
+qdrant_service = _create_qdrant_service()

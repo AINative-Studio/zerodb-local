@@ -423,4 +423,14 @@ class VectorService:
 
 
 # Global instance
-vector_service = VectorService()
+def _create_vector_service():
+    try:
+        from lite.config import is_lite_mode
+        if is_lite_mode():
+            from lite.services.vector_service_lite import VectorServiceLite
+            return VectorServiceLite()
+    except ImportError:
+        pass
+    return VectorService()
+
+vector_service = _create_vector_service()
