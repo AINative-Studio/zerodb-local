@@ -64,7 +64,7 @@ Issues = "https://github.com/AINative-Studio/core/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["zerodb_local", "api", "lite", "cli"]
 
-[tool.hatch.build.targets.wheel.shared-data]
+[tool.hatch.build.targets.wheel.force-include]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -75,6 +75,26 @@ include = [
     "README.md",
     "LICENSE",
     "pyproject.toml",
+]
+exclude = [
+    "cli/publish_env/",
+    "cli/test_cli_venv/",
+    "cli/test_user_env/",
+    "cli/venv/",
+    "cli/.venv/",
+    "cli/tests/",
+    "**/__pycache__/",
+    "**/*.pyc",
+    "data/",
+    "build/",
+    "dist/",
+    "fresh_install/",
+    "dashboard/",
+    "embeddings/",
+    "docs/",
+    "scripts/",
+    "*.egg-info/",
+    ".env*",
 ]
 
 [tool.pytest.ini_options]

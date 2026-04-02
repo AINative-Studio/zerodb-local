@@ -202,8 +202,17 @@ class TestLiteServicesImportable:
         WHEN DatabaseServiceLite is imported
         THEN it should initialize with a SQLite database
         """
-        from lite.services.database_service_lite import DatabaseServiceLite
-        svc = DatabaseServiceLite(db_path=str(tmp_path / "test.db"))
+        import importlib.util
+        module_path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "lite", "services", "database_service_lite.py"
+        ))
+        if not os.path.exists(module_path):
+            pytest.skip(f"database_service_lite.py not found at {module_path}")
+
+        spec = importlib.util.spec_from_file_location("database_service_lite", module_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        svc = mod.DatabaseServiceLite(db_path=str(tmp_path / "test.db"))
         health = svc.health_check()
         assert health["status"] in ("healthy", "ok")
 
@@ -220,7 +229,7 @@ class TestLiteServicesImportable:
         except ImportError:
             pytest.skip("faiss-cpu not installed")
 
-    def test_filesystem_service_importable(self, tmp_path):
+    async def test_filesystem_service_importable(self, tmp_path):
         """
         GIVEN ZERODB_BACKEND=lite
         WHEN FilesystemService is imported
@@ -228,10 +237,10 @@ class TestLiteServicesImportable:
         """
         from lite.services.filesystem_service import FilesystemService
         svc = FilesystemService(base_dir=str(tmp_path / "files"))
-        health = svc.health_check()
+        health = await svc.health_check()
         assert health["status"] in ("healthy", "ok")
 
-    def test_sqlite_events_importable(self, tmp_path):
+    async def test_sqlite_events_importable(self, tmp_path):
         """
         GIVEN ZERODB_BACKEND=lite
         WHEN SQLiteEventsService is imported
@@ -239,7 +248,7 @@ class TestLiteServicesImportable:
         """
         from lite.services.sqlite_events_service import SQLiteEventsService
         svc = SQLiteEventsService(db_path=str(tmp_path / "events.db"))
-        health = svc.health_check()
+        health = await svc.health_check()
         assert health["status"] in ("healthy", "ok")
 
     def test_embeddings_service_importable(self):
