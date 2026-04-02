@@ -78,4 +78,14 @@ class EmbeddingsService:
 
 
 # Global instance
-embeddings_service = EmbeddingsService()
+def _create_embeddings_service():
+    try:
+        from lite.config import is_lite_mode
+        if is_lite_mode():
+            from lite.services.embeddings_service_local import EmbeddingsServiceLocal
+            return EmbeddingsServiceLocal()
+    except ImportError:
+        pass
+    return EmbeddingsService()
+
+embeddings_service = _create_embeddings_service()

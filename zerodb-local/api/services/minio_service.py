@@ -7,9 +7,13 @@ from typing import Optional, List, Dict, Any, BinaryIO
 from datetime import timedelta
 from uuid import UUID
 
-from minio import Minio
-from minio.error import S3Error
-from urllib3.response import HTTPResponse
+try:
+    from minio import Minio
+    from minio.error import S3Error
+    from urllib3.response import HTTPResponse
+    _MINIO_AVAILABLE = True
+except ImportError:
+    _MINIO_AVAILABLE = False
 
 
 class MinIOService:
@@ -27,7 +31,10 @@ class MinIOService:
         self.secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
         self.testing = os.getenv("TESTING", "false").lower() == "true"
 
-        if not self.testing:
+        if not _MINIO_AVAILABLE:
+            from unittest.mock import MagicMock
+            self.client = MagicMock()
+        elif not self.testing:
             self.client = Minio(
                 self.endpoint,
                 access_key=self.access_key,
@@ -35,7 +42,6 @@ class MinIOService:
                 secure=self.secure
             )
         else:
-            # Mock MinIO client for testing
             from unittest.mock import MagicMock
             self.client = MagicMock()
 
@@ -366,4 +372,14 @@ class MinIOService:
 
 
 # Global instance
-minio_service = MinIOService()
+def _create_minio_service():
+    try:
+        from lite.config import is_lite_mode
+        if is_lite_mode():
+            from lite.services.filesystem_service import FilesystemService
+            return FilesystemService()
+    except ImportError:
+        pass
+    return MinIOService()
+
+minio_service = _create_minio_service()

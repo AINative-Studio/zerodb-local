@@ -89,5 +89,15 @@ class DatabaseService:
             }
 
 
-# Global instance
-database_service = DatabaseService()
+# Global instance — use lite backend when ZERODB_BACKEND=lite
+def _create_database_service():
+    try:
+        from lite.config import is_lite_mode
+        if is_lite_mode():
+            from lite.services.database_service_lite import DatabaseServiceLite
+            return DatabaseServiceLite()
+    except ImportError:
+        pass
+    return DatabaseService()
+
+database_service = _create_database_service()

@@ -29,7 +29,16 @@ security = HTTPBearer(auto_error=False)
 
 # Environment configuration
 CLOUD_API_URL = os.getenv("CLOUD_API_URL", "https://api.ainative.studio")
-AUTH_MODE = os.getenv("ZERODB_AUTH_MODE", "cloud")  # "cloud" or "local"
+
+# Default to local auth in lite mode (no cloud dependency needed)
+_default_auth_mode = "cloud"
+try:
+    from lite.config import is_lite_mode
+    if is_lite_mode():
+        _default_auth_mode = "local"
+except ImportError:
+    pass
+AUTH_MODE = os.getenv("ZERODB_AUTH_MODE", _default_auth_mode)
 
 
 # Cached cloud user (avoids re-validating on every request)

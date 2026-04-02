@@ -8,9 +8,13 @@ from typing import List, Dict, Any, Optional, Callable
 from uuid import UUID
 from datetime import datetime
 
-from kafka import KafkaProducer, KafkaConsumer, KafkaAdminClient
-from kafka.admin import NewTopic
-from kafka.errors import KafkaError, TopicAlreadyExistsError
+try:
+    from kafka import KafkaProducer, KafkaConsumer, KafkaAdminClient
+    from kafka.admin import NewTopic
+    from kafka.errors import KafkaError, TopicAlreadyExistsError
+    _KAFKA_AVAILABLE = True
+except ImportError:
+    _KAFKA_AVAILABLE = False
 
 
 class RedPandaService:
@@ -28,16 +32,11 @@ class RedPandaService:
         # Initialize admin client (lazy - created on first use)
         self._admin_client = None
 
-    def _get_admin_client(self) -> KafkaAdminClient:
+    def _get_admin_client(self):
         """Get or create Kafka admin client"""
         if self._admin_client is None:
-            if not self.testing:
-                self._admin_client = KafkaAdminClient(
-                    bootstrap_servers=self.bootstrap_servers,
-                    client_id="zerodb-admin"
-                )
-            else:
-                # Mock admin client for testing
+            if not _KAFKA_AVAILABLE or self.testing:
+                # Mock admin client for testing or lite mode
                 from unittest.mock import MagicMock
                 self._admin_client = MagicMock()
         return self._admin_client
@@ -382,4 +381,14 @@ class RedPandaService:
 
 
 # Global instance
-redpanda_service = RedPandaService()
+def _create_redpanda_service():
+    try:
+        from lite.config import is_lite_mode
+        if is_lite_mode():
+            from lite.services.sqlite_events_service import SQLiteEventsService
+            return SQLiteEventsService()
+    except ImportError:
+        pass
+    return RedPandaService()
+
+redpanda_service = _create_redpanda_service()
