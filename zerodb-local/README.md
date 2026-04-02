@@ -1,10 +1,49 @@
 # ZeroDB Local
 
-Run ZeroDB entirely on your local machine with Docker Compose. Develop, test, and sync with ZeroDB Cloud seamlessly.
+Run ZeroDB on your local machine. Two modes available:
+- **Lite mode** (recommended) — pip install, no Docker required
+- **Full mode** — Docker Compose with PostgreSQL, Qdrant, MinIO, RedPanda
+
+## Quick Start — Lite Mode (No Docker)
+
+```bash
+pip install zerodb-local[lite]
+zerodb serve
+```
+
+That's it. Server starts at `http://localhost:8000` with:
+- SQLite database
+- FAISS vector search
+- In-process embeddings (BAAI/bge-small-en-v1.5, 384 dims)
+- Local filesystem storage
+- SQLite event queue
+
+### Verify it works
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Create a project
+curl -X POST http://localhost:8000/v1/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-project", "description": "Testing ZeroDB Local"}'
+```
+
+### CLI Options
+
+```bash
+zerodb serve                        # Start on port 8000
+zerodb serve --port 9000            # Custom port
+zerodb serve --data-dir /my/data    # Custom data directory
+zerodb serve --cloud-key sk_...     # Enable cloud sync
+```
+
+Data is stored at `~/.zerodb/data/` by default.
 
 ## Features
 
-- **Complete Local Environment**: PostgreSQL, Qdrant, MinIO, RedPanda, Embeddings service
+- **Two backends**: Lite (SQLite + FAISS) or Full (PostgreSQL + Qdrant + Docker)
 - **Local API Server**: Mirrors all 128 ZeroDB Cloud endpoints
 - **Web Dashboard**: Manage projects, vectors, tables, files, and events via UI
 - **CLI Tool**: `zerodb` command for local control and cloud sync
@@ -13,12 +52,15 @@ Run ZeroDB entirely on your local machine with Docker Compose. Develop, test, an
 - **Cloud Sync**: Bidirectional sync with ZeroDB Cloud
 - **Production-Ready**: Same code paths as cloud for consistency
 
-## Quick Start
+---
+
+## Full Mode (Docker)
+
+For production-like environments with PostgreSQL, Qdrant, MinIO, and RedPanda.
 
 ### Prerequisites
 
 - **Docker** 20.10+ and **Docker Compose** 2.0+
-- **Node.js** 20+ (for dashboard development)
 - **Python** 3.11+ (for CLI tool)
 - At least 4GB RAM available for Docker
 
@@ -26,7 +68,7 @@ Run ZeroDB entirely on your local machine with Docker Compose. Develop, test, an
 
 1. **Clone the repository**:
    ```bash
-   cd /Users/aideveloper/core/zerodb-local
+   cd zerodb-local
    ```
 
 2. **Copy environment template**:
@@ -468,7 +510,7 @@ The `port-config.json` file in this directory describes all service ports and th
 
 ## License
 
-Part of the AINative Studio project. See repository root for license details.
+MIT License. See [LICENSE](./LICENSE) for details.
 
 ---
 
