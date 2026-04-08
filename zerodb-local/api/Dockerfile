@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
-COPY requirements.txt .
+COPY api/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --user -r requirements.txt
@@ -41,8 +41,9 @@ COPY --from=builder /root/.local /home/zerodb/.local
 # Make sure scripts in .local are usable
 ENV PATH=/home/zerodb/.local/bin:$PATH
 
-# Copy application code
-COPY . .
+# Copy application code and lite module (build context is repo root)
+COPY api/ .
+COPY lite/ ./lite/
 
 # Change ownership of app directory
 RUN chown -R zerodb:zerodb /app /home/zerodb/.local
