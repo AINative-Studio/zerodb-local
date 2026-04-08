@@ -135,8 +135,8 @@ services:
   # ZeroDB Local API server
   zerodb-api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api/Dockerfile
     container_name: zerodb-api
     depends_on:
       postgres:
@@ -173,6 +173,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - ./api:/app
+      - ./lite:/app/lite
     ports:
       - "${ZERODB_API_PORT:-8000}:8000"
     networks:
