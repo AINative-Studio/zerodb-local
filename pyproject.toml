@@ -58,8 +58,8 @@ zerodb = "zerodb_local.cli:app"
 [project.urls]
 Homepage = "https://zerodb.ai"
 Documentation = "https://docs.zerodb.ai"
-Repository = "https://github.com/AINative-Studio/core"
-Issues = "https://github.com/AINative-Studio/core/issues"
+Repository = "https://github.com/AINative-Studio/zerodb-local"
+Issues = "https://github.com/AINative-Studio/zerodb-local/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zerodb_local", "api", "lite", "cli"]
