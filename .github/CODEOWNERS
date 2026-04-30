@@ -1,0 +1,18 @@
+# CODEOWNERS — zerodb-local
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything
+* @AINative-Studio/core
+
+# Python package
+/zerodb-local/zerodb_local/ @AINative-Studio/core
+/zerodb-local/pyproject.toml @AINative-Studio/core
+
+# CI/CD
+/.github/ @AINative-Studio/core
+
+# Desktop (Tauri)
+/zerodb-local/desktop/ @AINative-Studio/core
+
+# Docs
+/docs/ @AINative-Studio/core
