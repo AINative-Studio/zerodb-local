@@ -278,7 +278,7 @@ Lite mode scales to ~100k vectors comfortably. Full mode handles 1M+.
 
 ## Support
 
-- **Docs:** https://ainative.studio/docs
+- **Docs:** https://docs.ainative.studio
 - **Issues:** https://github.com/AINative-Studio/zerodb-local/issues
 - **Community:** https://ainative.studio/community
 - **Email:** hello@ainative.studio
