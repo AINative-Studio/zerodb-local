@@ -1,0 +1,65 @@
+name: macOS Desktop Build (Tauri)
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+    branches: [main]
+    paths:
+      - 'zerodb-local/desktop/**'
+      - '.github/workflows/tauri.yml'
+  pull_request:
+    paths:
+      - 'zerodb-local/desktop/**'
+
+jobs:
+  build-macos:
+    name: Build macOS .dmg
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: zerodb-local/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Set up Python (sidecar)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        working-directory: zerodb-local
+        run: pip install -e ".[lite]"
+
+      - name: Install Node deps
+        working-directory: zerodb-local/desktop
+        run: npm ci
+
+      - name: Build Tauri app (universal binary)
+        working-directory: zerodb-local/desktop
+        run: npx tauri build --target universal-apple-darwin
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZeroDBLocal-macOS-${{ github.ref_name }}
+          path: zerodb-local/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: zerodb-local/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
