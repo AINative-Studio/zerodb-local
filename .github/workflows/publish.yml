@@ -1,0 +1,65 @@
+name: Release & Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: zerodb-local
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install hatch
+        run: pip install hatch
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Assert pyproject.toml version matches tag
+        run: |
+          PKG_VERSION=$(hatch version)
+          TAG_VERSION=${{ steps.version.outputs.version }}
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Version mismatch: pyproject.toml=$PKG_VERSION, tag=$TAG_VERSION"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: |
+          pip install -e ".[lite,dev]"
+          python -m pytest tests/ -v --cov=zerodb_local --cov-fail-under=70
+
+      - name: Build distribution
+        run: hatch build
+
+      - name: Publish to PyPI (trusted publisher)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: zerodb-local/dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: zerodb-local/dist/*
