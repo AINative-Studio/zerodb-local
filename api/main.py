@@ -33,6 +33,7 @@ from routers.sync_orchestrator import router as sync_orchestrator_router
 from routers.conflict_resolution import router as conflict_resolution_router
 from routers.pull_sync import router as pull_sync_router
 from routers.sync_history import router as sync_history_router
+from routers.raymond import router as raymond_router
 
 # Backend selector
 from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode, is_full_mode
@@ -199,6 +200,9 @@ for _prefix_base in ["/v1", "/api/v1"]:
 # Sync/CDC router (not project-scoped)
 app.include_router(change_detection_router, prefix="/v1/sync", tags=["Sync"])
 app.include_router(schema_diff_router, prefix="/v1/sync/schema", tags=["Schema Diff"])
+
+# Raymond — RAG retrieval over the Wealth Vault / RJF corpus (issue #174)
+app.include_router(raymond_router, tags=["Raymond"])
 
 # Export router (project-level export bundle creation)
 app.include_router(
