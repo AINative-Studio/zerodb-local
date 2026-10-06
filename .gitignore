@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local env/data — never commit secrets or a dev stack's persisted volumes
+.env.local
+.env
+data/
+
+# OS
+.DS_Store

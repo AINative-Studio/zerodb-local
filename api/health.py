@@ -69,6 +69,10 @@ async def check_postgres() -> Dict[str, Any]:
         import os
 
         database_url = os.getenv("DATABASE_URL", "postgresql://zerodb:localpass@postgres:5432/zerodb_local")
+        # SQLAlchemy 2.x resolves a bare "postgresql://" scheme to the psycopg
+        # (v3) driver by default, but requirements.txt installs psycopg2-binary.
+        if database_url.startswith("postgresql://"):
+            database_url = "postgresql+psycopg2://" + database_url[len("postgresql://"):]
         engine = create_engine(database_url)
 
         with engine.connect() as conn:

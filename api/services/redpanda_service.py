@@ -39,6 +39,10 @@ class RedPandaService:
                 # Mock admin client for testing or lite mode
                 from unittest.mock import MagicMock
                 self._admin_client = MagicMock()
+            else:
+                self._admin_client = KafkaAdminClient(
+                    bootstrap_servers=self.bootstrap_servers
+                )
         return self._admin_client
 
     def _get_producer(self) -> KafkaProducer:

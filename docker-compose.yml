@@ -43,9 +43,12 @@ services:
     # Note: Healthcheck removed - qdrant/qdrant image doesn't include curl/wget
     # Qdrant is fast to start, so service_started is sufficient
 
-  # MinIO S3-compatible object storage for files
+  # S3-compatible object storage for files. minio/minio was removed from
+  # Docker Hub by upstream on 2026-09-11 (OSS edition archived 2026-02-13).
+  # Using AINative-Studio/minio, built from source locally — no dependency
+  # on any now-dead upstream registry. See docs/zerodb-local/minio-fork-maintenance-plan.md.
   minio:
-    image: minio/minio:latest
+    image: ainative-studio/minio:local
     container_name: zerodb-minio
     command: server /data --console-address ":9001"
     environment:
@@ -94,7 +97,12 @@ services:
       - --advertise-rpc-addr
       - "redpanda:33145"
     volumes:
-      - ./data/redpanda:/var/lib/redpanda/data
+      # Named volume, not a bind mount: on Docker Desktop for Mac, bind mounts
+      # go through virtiofs/gRPC-FUSE, which doesn't support the fallocate
+      # semantics Redpanda's Seastar storage layer needs for segment creation
+      # (crashes with a vassert in storage/segment_utils.cc on first write).
+      # A named volume lives on the Linux VM's real filesystem instead.
+      - redpanda-data:/var/lib/redpanda/data
     ports:
       - "${ZERODB_REDPANDA_KAFKA_PORT:-9092}:9092"   # Kafka API
       - "${ZERODB_REDPANDA_PROXY_PORT:-8082}:8082"   # HTTP Proxy
@@ -150,8 +158,19 @@ services:
       embeddings:
         condition: service_healthy
     environment:
+      # Explicit, not auto-detected: lite/config.py's backend auto-detection
+      # keys off DATABASE_URL starting with exactly "postgresql://", which the
+      # +psycopg2 suffix below no longer matches — without this, the API
+      # silently falls back to lite mode (SQLite+FAISS) instead of this
+      # compose file's real Postgres/Qdrant/MinIO/Redpanda stack.
+      ZERODB_BACKEND: full
+
       # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-zerodb}:${POSTGRES_PASSWORD:-localpass}@postgres:5432/${POSTGRES_DB:-zerodb_local}
+      # +psycopg2 explicit: requirements.txt installs psycopg2-binary, but
+      # SQLAlchemy 2.x resolves a bare "postgresql://" scheme to the psycopg
+      # (v3) driver by default, which isn't installed — crashes zerodb-api on
+      # startup with ModuleNotFoundError: No module named 'psycopg'.
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-zerodb}:${POSTGRES_PASSWORD:-localpass}@postgres:5432/${POSTGRES_DB:-zerodb_local}
 
       # Services
       QDRANT_URL: http://qdrant:6333

@@ -33,9 +33,12 @@ from routers.sync_orchestrator import router as sync_orchestrator_router
 from routers.conflict_resolution import router as conflict_resolution_router
 from routers.pull_sync import router as pull_sync_router
 from routers.sync_history import router as sync_history_router
+from routers.raymond import router as raymond_router
 
 # Backend selector
-from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode
+from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode, is_full_mode
+
+from services.minio_service import minio_service
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -62,11 +65,12 @@ async def lifespan(app: FastAPI):
     print(f"API docs enabled: {ENABLE_DOCS}")
     print("=" * 60)
 
-    # Initialize services (to be added in later stories)
-    # await init_database()
-    # await init_qdrant()
-    # await init_minio()
-    # await init_redpanda()
+    # MinIO bucket must exist before any upload/download/delete call —
+    # nothing else in the request path creates it (was a stubbed-out
+    # "# await init_minio()" no-op; every file upload failed with
+    # NoSuchBucket until this ran).
+    if is_full_mode():
+        await minio_service.initialize_bucket()
 
     print("✅ All services initialized")
     print("=" * 60)
@@ -196,6 +200,9 @@ for _prefix_base in ["/v1", "/api/v1"]:
 # Sync/CDC router (not project-scoped)
 app.include_router(change_detection_router, prefix="/v1/sync", tags=["Sync"])
 app.include_router(schema_diff_router, prefix="/v1/sync/schema", tags=["Schema Diff"])
+
+# Raymond — RAG retrieval over the Wealth Vault / RJF corpus (issue #174)
+app.include_router(raymond_router, tags=["Raymond"])
 
 # Export router (project-level export bundle creation)
 app.include_router(

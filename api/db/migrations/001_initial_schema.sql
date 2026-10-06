@@ -18,12 +18,26 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ==========================================
 
 -- Projects table
+-- Column set kept in sync with ../schema.sql's projects definition — the two
+-- files must agree, since the Postgres docker-entrypoint auto-runs schema.sql
+-- immediately after init.sh runs this migration, and schema.sql's own
+-- "CREATE TABLE IF NOT EXISTS projects" silently no-ops once this one has
+-- already created the table, so any column present only in schema.sql never
+-- actually gets added.
 CREATE TABLE IF NOT EXISTS projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     description TEXT,
     user_id UUID NOT NULL,
     organization_id UUID,
+    tier VARCHAR(20) DEFAULT 'free',
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    database_enabled BOOLEAN DEFAULT TRUE,
+    database_config JSONB DEFAULT '{"vector_dimensions": 384}'::jsonb,
+    vector_dimensions INTEGER DEFAULT 384,
+    quantum_enabled BOOLEAN DEFAULT FALSE,
+    mcp_enabled BOOLEAN DEFAULT FALSE,
+    railway_project_id VARCHAR(255),
     settings JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -43,7 +57,7 @@ CREATE TABLE IF NOT EXISTS vectors (
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     namespace VARCHAR(255) DEFAULT 'default',
     vector_id VARCHAR(512),
-    embedding vector(1536),
+    embedding vector(384),
     document TEXT,
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -67,7 +81,7 @@ CREATE TABLE IF NOT EXISTS memory (
     agent_id VARCHAR(255),
     role VARCHAR(50),
     content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding vector(384),
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     CONSTRAINT memory_role_check CHECK (role IN ('user', 'assistant', 'system'))
