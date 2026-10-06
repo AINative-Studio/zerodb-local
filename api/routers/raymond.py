@@ -18,15 +18,25 @@ from the same retrieved chunks this endpoint already returns).
 
 Guardrails implemented per the corpus's own Section 57 ("Deployment
 Notes for an Internal RAG Bot"):
-- Negative-test awareness: if the top-scoring chunk itself documents an
-  explicit "not publicly disclosed" / "bot should decline" answer (the
-  golden Q&A set's own negative-test rows), that is surfaced as a
-  `refusal_signal` in the response rather than silently returned as if
-  it were a normal fact — a synthesis layer built on top of this can use
-  that signal to actually decline instead of guessing.
+- Negative-test awareness: `KNOWN_NONDISCLOSURE_KEYWORDS` is an explicit,
+  hardcoded keyword check against the ASKED QUESTION (not the retrieved
+  chunk text) for the corpus's two known negative-test cases (golden Q&A
+  rows #18, #32) — see that constant's own comment for why this is
+  deliberately narrow, not a general guardrail.
+  An earlier version of this endpoint also scanned every retrieved
+  chunk's TEXT for marker phrases like "not publicly disclosed" and set
+  `refusal_signal` on any match — removed as a real bug: the corpus's own
+  "Golden Q&A Set" chunk (Section 14) is a dense, frequently-high-scoring
+  match for many unrelated firm-fact questions, and it literally contains
+  those marker phrases as part of documenting the negative-test ROWS
+  themselves. A real, answerable question ("What were RJF's FY2025 net
+  revenues?", correct answer $14.07B sitting in a separate chunk) was
+  false-refused by that check whenever the Golden Q&A chunk also surfaced
+  in the results, which was often (confirmed live, 2026-10-06).
 - `as_of`/`sources` are always returned per chunk so any caller can show
   a citation, not just a bare fact.
 """
+import re
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -45,13 +55,6 @@ RJF_CORPUS_NAMESPACE = "rjf-corpus"
 # real question, the same bug encountered verifying retrieval manually.
 RJF_SEARCH_THRESHOLD = 0.35
 
-NEGATIVE_TEST_MARKERS = (
-    "not publicly disclosed",
-    "bot should decline",
-    "bot must refuse",
-    "not disclosed",
-)
-
 # Keyword fallback for the corpus's known negative-test questions (golden
 # Q&A rows #18 and #32 — see Section 14/29 of the knowledge base). Dense
 # retrieval alone misses both: the fact that answers them (e.g. "salaries
@@ -68,6 +71,22 @@ KNOWN_NONDISCLOSURE_KEYWORDS: Dict[str, str] = {
     "feld": "Non-NEO executive salaries (e.g. the Chief AI Officer) are not disclosed in SEC filings — see knowledge base §5.6.",
     "clark capital": "The Clark Capital acquisition price was not disclosed publicly — see knowledge base §8, note on Clark Capital.",
 }
+
+# Distinct from the nondisclosure case above: this corpus is built entirely
+# from RJF's own PUBLIC disclosures (10-Ks, press releases, public web
+# pages — see the module docstring and Section 56's source registry). It
+# structurally cannot and does not contain any individual client's account
+# data, balance, or holdings — there is no "undisclosed fact" to look up
+# here, the data category itself doesn't exist in this corpus. A caller
+# asking for client-specific data should be told that plainly rather than
+# getting back general fee-schedule/aggregate chunks that happen to score
+# well (confirmed live: "quote a client's account balance" retrieves the
+# real public fee-schedule chunk, which is a real public fact but not an
+# answer to what was actually asked — golden Q&A row #55). Matches on
+# "client" co-occurring with "balance" or "holdings" -- narrow enough not
+# to misfire on legitimate public-fee-schedule questions that mention
+# "client accounts" generically without asking for one individual's data.
+CLIENT_DATA_PATTERN = re.compile(r"\bclient'?s?\b.*\b(balance|holdings)\b|\b(balance|holdings)\b.*\bclient'?s?\b")
 
 
 class AskRequest(BaseModel):
@@ -139,6 +158,14 @@ async def ask(project_id: str, body: AskRequest):
             refusal_reason = reason
             break
 
+    if not refusal_signal and CLIENT_DATA_PATTERN.search(lowered_question):
+        refusal_signal = True
+        refusal_reason = (
+            "This corpus is built entirely from Raymond James's own public disclosures — "
+            "it holds no individual client account data, balances, or holdings. Raymond "
+            "cannot answer questions about a specific client's own data from this source."
+        )
+
     for r in results:
         metadata: Dict[str, Any] = r.get("metadata") or {}
         text = r.get("document", "")
@@ -152,15 +179,6 @@ async def ask(project_id: str, body: AskRequest):
             topics=metadata.get("topics", []),
         )
         chunks.append(chunk)
-
-        lowered = text.lower()
-        if any(marker in lowered for marker in NEGATIVE_TEST_MARKERS):
-            refusal_signal = True
-            refusal_reason = (
-                "The top-matching corpus content itself documents this as a fact the knowledge base "
-                "does not have (e.g. an undisclosed figure, or client-specific data it was never given). "
-                "A synthesis layer should decline to state a number here rather than guess."
-            )
 
     return AskResponse(
         question=body.question,
