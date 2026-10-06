@@ -30,6 +30,12 @@ class DatabaseService:
             "DATABASE_URL",
             "postgresql://zerodb:localpass@postgres:5432/zerodb_local"
         )
+        # SQLAlchemy 2.x resolves a bare "postgresql://" scheme to the psycopg
+        # (v3) driver by default, but requirements.txt installs psycopg2-binary —
+        # force the psycopg2 driver explicitly so a DATABASE_URL set without the
+        # dialect suffix doesn't crash with ModuleNotFoundError: No module named 'psycopg'.
+        if database_url.startswith("postgresql://"):
+            database_url = "postgresql+psycopg2://" + database_url[len("postgresql://"):]
 
         engine_kwargs = {
             "pool_pre_ping": True,

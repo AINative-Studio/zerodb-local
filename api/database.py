@@ -25,6 +25,13 @@ else:
         "DATABASE_URL",
         "postgresql://zerodb:localpass@localhost:5432/zerodb_local"
     )
+    # SQLAlchemy 2.x resolves a bare "postgresql://" scheme to the psycopg
+    # (v3) driver by default, but requirements.txt installs psycopg2-binary —
+    # force the psycopg2 driver explicitly so a DATABASE_URL set without the
+    # dialect suffix (e.g. docker-compose.yml's zerodb-api DATABASE_URL) doesn't
+    # crash the API on startup with ModuleNotFoundError: No module named 'psycopg'.
+    if DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgresql://"):]
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,

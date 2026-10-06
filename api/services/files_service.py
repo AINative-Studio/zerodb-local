@@ -5,8 +5,9 @@ Handles file storage using PostgreSQL (metadata) + MinIO (object storage)
 import json
 import os
 import base64
+from io import BytesIO
 from typing import List, Dict, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -23,7 +24,12 @@ class FilesService:
     """
 
     def __init__(self):
-        self.default_bucket = os.getenv("MINIO_BUCKET_NAME", "zerodb-local")
+        # No bucket config here: minio_service owns bucket naming and
+        # auto-creation on its own self.default_bucket (MINIO_BUCKET env var,
+        # "zerodb-local-files" default). This class used to duplicate that
+        # with a second, drifted env var (MINIO_BUCKET_NAME) pointing at a
+        # bucket that was never created, so every upload failed.
+        pass
 
     async def upload_file(
         self,
@@ -55,26 +61,36 @@ class FilesService:
             Created file info
         """
         # Step 1: Upload to MinIO
-        file_path = f"{project_id}/{folder}/{file_name}" if folder else f"{project_id}/{file_name}"
+        file_id = str(uuid4())
         file_size = len(file_content)
 
-        await minio_service.upload_object(
-            bucket_name=self.default_bucket,
-            object_name=file_path,
-            data=file_content,
-            content_type=content_type
+        # bucket_name intentionally omitted: minio_service owns bucket naming
+        # and auto-creation (self.default_bucket there, "zerodb-local-files"
+        # via MINIO_BUCKET) — this service previously duplicated that as a
+        # second, drifted env var (MINIO_BUCKET_NAME, "zerodb-local") that was
+        # never auto-created, causing every upload to fail with NoSuchBucket.
+        file_path = await minio_service.upload_file(
+            project_id=project_id,
+            file_id=file_id,
+            file_content=BytesIO(file_content),
+            file_name=file_name,
+            content_type=content_type,
+            folder=folder,
+            metadata=metadata
         )
 
-        # Step 2: Store metadata in PostgreSQL
+        # Step 2: Store metadata in PostgreSQL — reuse file_id as the row's id
+        # so it stays consistent with the MinIO object path built above.
         insert_query = text("""
-            INSERT INTO files (project_id, file_name, file_path, content_type, file_size, folder, metadata)
-            VALUES (:project_id, :file_name, :file_path, :content_type, :file_size, :folder, CAST(:metadata AS jsonb))
+            INSERT INTO files (id, project_id, file_name, file_path, content_type, file_size, folder, metadata)
+            VALUES (:id, :project_id, :file_name, :file_path, :content_type, :file_size, :folder, CAST(:metadata AS jsonb))
             RETURNING id, file_name, file_path, content_type, file_size, folder, metadata, created_at, updated_at
         """)
 
         result = db.execute(
             insert_query,
             {
+                "id": file_id,
                 "project_id": str(project_id),
                 "file_name": file_name,
                 "file_path": file_path,
@@ -139,11 +155,18 @@ class FilesService:
         if not result:
             return None
 
-        # Step 2: Download from MinIO
-        file_content = await minio_service.download_object(
-            bucket_name=self.default_bucket,
+        # Step 2: Download from MinIO. bucket_name omitted — see upload_file's
+        # comment; minio_service.download_file defaults to its own bucket.
+        # It returns a raw urllib3 HTTPResponse (minio-py convention), not
+        # bytes — must read() it and release the connection explicitly.
+        response = await minio_service.download_file(
             object_name=result.file_path
         )
+        try:
+            file_content = response.read()
+        finally:
+            response.close()
+            response.release_conn()
 
         # Encode to base64 if requested
         if return_base64:
@@ -322,10 +345,9 @@ class FilesService:
 
         db.commit()
 
-        # Hard delete from MinIO
+        # Hard delete from MinIO. bucket_name omitted — see upload_file's comment.
         try:
-            await minio_service.delete_object(
-                bucket_name=self.default_bucket,
+            await minio_service.delete_file(
                 object_name=file_path
             )
         except Exception:
@@ -368,11 +390,12 @@ class FilesService:
         if not result:
             return None
 
-        # Generate presigned URL from MinIO
+        # Generate presigned URL from MinIO. bucket_name omitted — see
+        # upload_file's comment. minio_service's parameter is expiry_hours,
+        # not expiry_seconds — pass through directly, no unit conversion.
         url = await minio_service.generate_presigned_url(
-            bucket_name=self.default_bucket,
             object_name=result.file_path,
-            expiry_seconds=expiry_hours * 3600
+            expiry_hours=expiry_hours
         )
 
         return url
