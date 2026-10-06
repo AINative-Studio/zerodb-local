@@ -35,7 +35,9 @@ from routers.pull_sync import router as pull_sync_router
 from routers.sync_history import router as sync_history_router
 
 # Backend selector
-from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode
+from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode, is_full_mode
+
+from services.minio_service import minio_service
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -62,11 +64,12 @@ async def lifespan(app: FastAPI):
     print(f"API docs enabled: {ENABLE_DOCS}")
     print("=" * 60)
 
-    # Initialize services (to be added in later stories)
-    # await init_database()
-    # await init_qdrant()
-    # await init_minio()
-    # await init_redpanda()
+    # MinIO bucket must exist before any upload/download/delete call —
+    # nothing else in the request path creates it (was a stubbed-out
+    # "# await init_minio()" no-op; every file upload failed with
+    # NoSuchBucket until this ran).
+    if is_full_mode():
+        await minio_service.initialize_bucket()
 
     print("✅ All services initialized")
     print("=" * 60)
