@@ -1,15 +1,36 @@
 name: CI
 
+# Refs #43: paths/working-directory used to say 'zerodb-local/**' and
+# 'zerodb-local', matching this repo's layout BEFORE #1 ("Flatten repo
+# layout — promote zerodb-local/* to repo root", 2026-04-30) moved
+# api/, cli/, lite/, zerodb_local/, and tests/ up to the repo root.
+# That rename broke this workflow in two ways: the two runs immediately
+# after the flatten both FAILED (cd into a directory that no longer
+# existed), and after that the paths: filter simply never matched
+# anything again, so CI silently stopped triggering at all -- confirmed
+# live via `gh run list`, and via 5 real PRs (#38-#42) each showing "no
+# checks reported". Updated both to the real post-flatten layout.
+
 on:
   push:
     branches: [main]
     paths:
-      - 'zerodb-local/**'
+      - 'api/**'
+      - 'cli/**'
+      - 'lite/**'
+      - 'zerodb_local/**'
+      - 'tests/**'
+      - 'pyproject.toml'
       - '.github/workflows/ci.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'zerodb-local/**'
+      - 'api/**'
+      - 'cli/**'
+      - 'lite/**'
+      - 'zerodb_local/**'
+      - 'tests/**'
+      - 'pyproject.toml'
       - '.github/workflows/ci.yml'
 
 jobs:
@@ -20,10 +41,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
-
-    defaults:
-      run:
-        working-directory: zerodb-local
 
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +58,7 @@ jobs:
       - name: Lint (ruff)
         run: |
           pip install ruff
-          ruff check zerodb_local/ --select E,F,W --ignore E501
+          ruff check zerodb_local/
 
       - name: Type check (pyright)
         run: |
@@ -56,10 +73,6 @@ jobs:
     name: Build distribution
     runs-on: ubuntu-latest
     needs: test
-
-    defaults:
-      run:
-        working-directory: zerodb-local
 
     steps:
       - uses: actions/checkout@v4
@@ -79,4 +92,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: zerodb-local/dist/
+          path: dist/
