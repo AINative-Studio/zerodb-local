@@ -503,10 +503,8 @@ The `port-config.json` file in this directory describes all service ports and th
 
 ## Support
 
-- **GitHub Issues**: https://github.com/AINative-Studio/core/issues
-- **Documentation**: https://www.ainative.studio/docs
-- **Community**: https://www.ainative.studio/community
-- **Email**: hello@ainative.studio
+See [SUPPORT.md](./SUPPORT.md) for how to get help, report a bug, or
+request a feature.
 
 ## License
 
