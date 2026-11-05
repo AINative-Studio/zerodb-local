@@ -5,6 +5,9 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: zerodb-postgres
+    env_file:
+      - path: .env.local
+        required: false
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-zerodb_local}
       POSTGRES_USER: ${POSTGRES_USER:-zerodb}
@@ -30,6 +33,9 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: zerodb-qdrant
+    env_file:
+      - path: .env.local
+        required: false
     volumes:
       - ./data/qdrant:/qdrant/storage
     ports:
@@ -51,6 +57,9 @@ services:
     image: ainative-studio/minio:local
     container_name: zerodb-minio
     command: server /data --console-address ":9001"
+    env_file:
+      - path: .env.local
+        required: false
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
@@ -72,6 +81,9 @@ services:
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
     container_name: zerodb-redpanda
+    env_file:
+      - path: .env.local
+        required: false
     command:
       - redpanda
       - start
@@ -123,6 +135,9 @@ services:
       context: ./embeddings
       dockerfile: Dockerfile
     container_name: zerodb-embeddings
+    env_file:
+      - path: .env.local
+        required: false
     environment:
       MODEL_NAME: ${EMBEDDINGS_MODEL:-BAAI/bge-small-en-v1.5}
       DEVICE: ${EMBEDDINGS_DEVICE:-cpu}
@@ -157,6 +172,9 @@ services:
         condition: service_healthy
       embeddings:
         condition: service_healthy
+    env_file:
+      - path: .env.local
+        required: false
     environment:
       # Explicit, not auto-detected: lite/config.py's backend auto-detection
       # keys off DATABASE_URL starting with exactly "postgresql://", which the
@@ -184,8 +202,16 @@ services:
       CLOUD_API_URL: ${CLOUD_API_URL:-https://api.ainative.studio}
       CLOUD_API_KEY: ${CLOUD_API_KEY:-}
 
-      # Authentication — "cloud" syncs with your AINative account, "local" for offline dev
-      ZERODB_AUTH_MODE: ${ZERODB_AUTH_MODE:-cloud}
+      # Authentication — "cloud" syncs with your AINative account, "local" for
+      # offline dev. Deliberately NOT interpolated as ${ZERODB_AUTH_MODE:-cloud}
+      # here: Compose's ${VAR} interpolation only ever reads the shell env or
+      # the top-level .env file, never a service's own env_file: entry — so a
+      # value set in .env.local (this repo's documented convention) was always
+      # silently overridden back to "cloud" by this line's own fallback,
+      # regardless of env_file: above. Omitting the key entirely lets
+      # env_file:'s real value pass through untouched; when .env.local doesn't
+      # set it either, api/auth.py's own os.getenv("ZERODB_AUTH_MODE", "cloud")
+      # default takes over with the identical net result. Refs #37.
 
       # Environment
       ZERODB_ENV: ${ZERODB_ENV:-local}
@@ -213,6 +239,9 @@ services:
     depends_on:
       zerodb-api:
         condition: service_healthy
+    env_file:
+      - path: .env.local
+        required: false
     environment:
       VITE_API_URL: http://localhost:${ZERODB_API_PORT:-8000}
       VITE_API_INTERNAL_URL: http://zerodb-api:8000
