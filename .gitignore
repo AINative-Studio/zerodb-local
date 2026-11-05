@@ -11,3 +11,7 @@ data/
 
 # OS
 .DS_Store
+
+# Coverage artifacts
+.coverage
+htmlcov/
