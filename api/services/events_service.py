@@ -11,6 +11,21 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from services.redpanda_service import redpanda_service
+from lite.config import is_lite_mode
+from lite.sql_compat import jsonb_cast_sql, new_id, parse_json_column, to_isoformat
+
+
+def _bind_timestamp(value: datetime):
+    """
+    Bind a datetime filter value in the shape the active backend's
+    `timestamp` column expects: SQLite stores timestamps as ISO-8601 TEXT
+    (see lite/db/schema_lite.sql), so a raw datetime object compares
+    incorrectly against it; PostgreSQL's timestamp column takes a datetime
+    object directly.
+    """
+    if is_lite_mode():
+        return value.isoformat()
+    return value
 
 
 class EventsService:
@@ -52,23 +67,31 @@ class EventsService:
         Returns:
             Created event info
         """
-        # Step 1: Store in PostgreSQL
-        insert_query = text("""
-            INSERT INTO events (project_id, event_type, source, correlation_id, event_data)
-            VALUES (:project_id, :event_type, :source, :correlation_id, CAST(:event_data AS jsonb))
+        # Step 1: Store in PostgreSQL. In lite mode `id` has no SQL-level
+        # default (Postgres's schema declares DEFAULT gen_random_uuid(),
+        # SQLite's does not), so generate it explicitly.
+        lite = is_lite_mode()
+        columns = "project_id, event_type, source, correlation_id, event_data"
+        values = f":project_id, :event_type, :source, :correlation_id, {jsonb_cast_sql(':event_data', lite)}"
+        params = {
+            "project_id": str(project_id),
+            "event_type": event_type,
+            "source": source,
+            "correlation_id": correlation_id,
+            "event_data": json.dumps(event_data) if event_data else "{}"
+        }
+        if lite:
+            columns = "id, " + columns
+            values = ":id, " + values
+            params["id"] = new_id()
+
+        insert_query = text(f"""
+            INSERT INTO events ({columns})
+            VALUES ({values})
             RETURNING id, event_type, source, correlation_id, event_data, timestamp
         """)
 
-        result = db.execute(
-            insert_query,
-            {
-                "project_id": str(project_id),
-                "event_type": event_type,
-                "source": source,
-                "correlation_id": correlation_id,
-                "event_data": json.dumps(event_data) if event_data else "{}"
-            }
-        ).first()
+        result = db.execute(insert_query, params).first()
 
         db.commit()
 
@@ -76,19 +99,22 @@ class EventsService:
 
         # Step 2: Publish to RedPanda
         topic = f"{self.default_topic_prefix}.{project_id}.events"
-        event_message = {
-            "id": event_id,
-            "project_id": str(project_id),
-            "event_type": result.event_type,
-            "source": result.source,
-            "correlation_id": result.correlation_id,
-            "event_data": result.event_data,
-            "timestamp": result.timestamp.isoformat() if result.timestamp else None
-        }
+        event_data_out = parse_json_column(result.event_data)
+        timestamp_out = to_isoformat(result.timestamp)
 
+        # NOTE: this call site previously passed topic=/event= kwargs that
+        # match neither RedPandaService.publish_event's nor
+        # SQLiteEventsService.publish_event's actual signature (both take
+        # project_id/event_type/event_data/source/correlation_id/topic_name)
+        # -- a pre-existing bug independent of lite vs. full mode, fixed here
+        # because it blocks event creation end-to-end in both backends.
         await redpanda_service.publish_event(
-            topic=topic,
-            event=event_message
+            project_id=project_id,
+            event_type=result.event_type,
+            event_data=event_data_out,
+            source=result.source,
+            correlation_id=result.correlation_id,
+            topic_name=topic
         )
 
         return {
@@ -96,8 +122,8 @@ class EventsService:
             "event_type": result.event_type,
             "source": result.source,
             "correlation_id": result.correlation_id,
-            "event_data": result.event_data,
-            "timestamp": result.timestamp.isoformat() if result.timestamp else None
+            "event_data": event_data_out,
+            "timestamp": timestamp_out
         }
 
     async def list_events(
@@ -145,11 +171,11 @@ class EventsService:
 
         if start_time:
             filters.append("timestamp >= :start_time")
-            params["start_time"] = start_time
+            params["start_time"] = _bind_timestamp(start_time)
 
         if end_time:
             filters.append("timestamp <= :end_time")
-            params["end_time"] = end_time
+            params["end_time"] = _bind_timestamp(end_time)
 
         where_clause = " AND ".join(filters)
 
@@ -169,8 +195,8 @@ class EventsService:
                 "event_type": row.event_type,
                 "source": row.source,
                 "correlation_id": row.correlation_id,
-                "event_data": row.event_data,
-                "timestamp": row.timestamp.isoformat() if row.timestamp else None
+                "event_data": parse_json_column(row.event_data),
+                "timestamp": to_isoformat(row.timestamp)
             }
             for row in results
         ]
@@ -212,8 +238,8 @@ class EventsService:
             "event_type": result.event_type,
             "source": result.source,
             "correlation_id": result.correlation_id,
-            "event_data": result.event_data,
-            "timestamp": result.timestamp.isoformat() if result.timestamp else None
+            "event_data": parse_json_column(result.event_data),
+            "timestamp": to_isoformat(result.timestamp)
         }
 
     async def get_event_stats(
@@ -248,6 +274,8 @@ class EventsService:
         else:
             start_time = now - timedelta(days=1)  # Default to day
 
+        start_time_bound = _bind_timestamp(start_time)
+
         # Build query
         if event_type:
             stats_query = text("""
@@ -264,7 +292,7 @@ class EventsService:
             params = {
                 "project_id": str(project_id),
                 "event_type": event_type,
-                "start_time": start_time
+                "start_time": start_time_bound
             }
         else:
             stats_query = text("""
@@ -278,7 +306,7 @@ class EventsService:
             """)
             params = {
                 "project_id": str(project_id),
-                "start_time": start_time
+                "start_time": start_time_bound
             }
 
         result = db.execute(stats_query, params).first()
@@ -296,7 +324,7 @@ class EventsService:
 
         top_types_results = db.execute(
             top_types_query,
-            {"project_id": str(project_id), "start_time": start_time}
+            {"project_id": str(project_id), "start_time": start_time_bound}
         ).fetchall()
 
         top_event_types = [
