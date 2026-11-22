@@ -147,7 +147,12 @@ class TestVectorOperations:
         if not project_id:
             pytest.skip("No project ID in response")
 
-        # Upsert a vector (384 dims for bge-small)
+        # Upsert a vector (384 dims for bge-small). Generous timeout: this is
+        # the first call in the suite to touch the local embeddings service,
+        # which lazily downloads BAAI/bge-small-en-v1.5 from HuggingFace Hub
+        # on first use (lite/services/embeddings_service_local.py) -- a cold,
+        # unauthenticated-rate-limited CI runner with no model cache can
+        # legitimately take well over 10s. Refs #61.
         vector = [0.1] * 384
         upsert_resp = httpx.post(
             f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
@@ -156,7 +161,7 @@ class TestVectorOperations:
                 "document": "integration test document",
                 "metadata": {"source": "test"},
             },
-            timeout=10,
+            timeout=90,
         )
         # Accept various success codes
         assert upsert_resp.status_code in (200, 201, 202)

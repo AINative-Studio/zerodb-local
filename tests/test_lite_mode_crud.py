@@ -270,10 +270,16 @@ class TestVectorsCRUD:
     """
 
     def test_upsert_search_list_get_delete(self, lite_server, project_id):
+        # Generous timeout: this may be the first call in the suite to touch
+        # the local embeddings service, which lazily downloads
+        # BAAI/bge-small-en-v1.5 from HuggingFace Hub on first use
+        # (lite/services/embeddings_service_local.py) -- a cold,
+        # unauthenticated-rate-limited CI runner with no model cache can
+        # legitimately take well over 30s. Refs #61.
         upsert_resp = httpx.post(
             f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
             json={"document": "the quick brown fox", "metadata": {"a": 1}, "namespace": "default"},
-            timeout=30,
+            timeout=90,
         )
         assert upsert_resp.status_code == 200, upsert_resp.text
         vector = upsert_resp.json()

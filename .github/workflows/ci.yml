@@ -51,6 +51,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # Refs #61: the lite-mode test suite's first vector-embedding call
+      # lazily downloads BAAI/bge-small-en-v1.5 from HuggingFace Hub
+      # (lite/services/embeddings_service_local.py). With no cache, every CI
+      # run re-downloads it under HF's unauthenticated rate limits, which
+      # flaked tests/test_integration_lite.py's vector test with a timeout.
+      # Cached across runs by the model name -- bump the key if the pinned
+      # model name ever changes.
+      - name: Cache embeddings model
+        uses: actions/cache@v4
+        with:
+          path: ~/.zerodb/models
+          key: zerodb-embeddings-bge-small-en-v1.5
+
       - name: Install dependencies
         run: |
           pip install -e ".[lite,dev]"
