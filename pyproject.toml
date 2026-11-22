@@ -32,6 +32,12 @@ dependencies = [
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "python-multipart>=0.0.6",
+    # Refs #46: both used unconditionally by the cloud-sync code path
+    # (cli/sync_planner.py and api/services/cloud_client.py respectively)
+    # but were never declared here, so a fresh `pip install -e .` could
+    # not run `zerodb sync plan` or start the API server at all.
+    "requests>=2.28.0",
+    "tenacity>=8.0.0",
 ]
 
 [project.optional-dependencies]
