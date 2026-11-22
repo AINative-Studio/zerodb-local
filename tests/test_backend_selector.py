@@ -14,7 +14,6 @@ import importlib
 import os
 import sys
 import types
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -186,43 +185,61 @@ class TestServiceLazyLoadingLiteMode:
         with pytest.raises(AttributeError, match="no_such_service"):
             _ = services.no_such_service
 
-    def test_lite_mode_routes_to_lite_module(self, tmp_path):
+    def test_lite_mode_routes_to_lite_module(self, tmp_path, monkeypatch):
         """WHEN lite mode is active THEN __getattr__ loads from lite.services.*."""
-        # Create a stub lite service module for the test
-        lite_services_dir = Path(__file__).resolve().parent.parent / "lite" / "services"
-        lite_services_dir.mkdir(parents=True, exist_ok=True)
+        # Build an isolated stub "database_service_lite" module under
+        # tmp_path and prepend its directory to sys.path, instead of
+        # writing into the real lite/services/ package.
+        # Refs #51: the previous version of this test resolved
+        # Path(__file__).resolve().parent.parent / "lite" / "services" --
+        # the REAL repo source tree -- and wrote into it directly (even
+        # truncating the real __init__.py and unlink()-ing, rather than
+        # restoring, the real ~170-line database_service_lite.py), so every
+        # `pytest tests/` run permanently corrupted the working tree.
+        #
+        # The real "lite" and "lite.services" packages are left untouched
+        # (lite.config, imported below, lives there) -- only the single
+        # leaf module "lite.services.database_service_lite" is swapped for
+        # a fake module object built from the isolated stub file.
+        stub_dir = tmp_path / "stub_lite_services"
+        stub_dir.mkdir(parents=True, exist_ok=True)
+        stub_module_file = stub_dir / "database_service_lite.py"
+        stub_module_file.write_text("database_service = 'lite_db_stub'\n")
 
-        init_file = lite_services_dir / "__init__.py"
-        stub_file = lite_services_dir / "database_service_lite.py"
+        monkeypatch.syspath_prepend(str(stub_dir))
 
-        # Always write a clean stub (overwrite any stale source)
-        init_file.write_text("")
-        stub_file.write_text("database_service = 'lite_db_stub'\n")
+        cfg = _reload_config({
+            "ZERODB_BACKEND": "lite",
+            "ZERODB_DATA_DIR": str(tmp_path / "data"),
+            "ZERODB_MODELS_DIR": str(tmp_path / "models"),
+        })
+        assert cfg.is_lite_mode() is True
 
-        try:
-            cfg = _reload_config({
-                "ZERODB_BACKEND": "lite",
-                "ZERODB_DATA_DIR": str(tmp_path / "data"),
-                "ZERODB_MODELS_DIR": str(tmp_path / "models"),
-            })
-            assert cfg.is_lite_mode() is True
+        spec = importlib.util.find_spec("services")
+        if spec is None:
+            pytest.skip("services package not on sys.path")
 
-            # Clear cached module so our fresh stub is loaded
-            sys.modules.pop("lite.services.database_service_lite", None)
-            sys.modules.pop("services", None)
+        # Load the stub as a standalone module (NOT as a submodule of
+        # the real "lite.services" package) and register it under the
+        # dotted name that services.__getattr__ imports, so the
+        # importlib.import_module("lite.services.database_service_lite")
+        # call inside it resolves to our isolated stub instead of
+        # touching the real file on disk. monkeypatch.setitem/delitem
+        # restore sys.modules automatically on teardown.
+        stub_spec = importlib.util.spec_from_file_location(
+            "lite.services.database_service_lite", stub_module_file
+        )
+        stub_module = importlib.util.module_from_spec(stub_spec)
+        stub_spec.loader.exec_module(stub_module)
+        monkeypatch.setitem(
+            sys.modules, "lite.services.database_service_lite", stub_module
+        )
+        monkeypatch.delitem(sys.modules, "services", raising=False)
 
-            spec = importlib.util.find_spec("services")
-            if spec is None:
-                pytest.skip("services package not on sys.path")
-
-            import services
-            importlib.reload(services)
-            result = services.database_service
-            assert result == "lite_db_stub"
-        finally:
-            # Clean up stub file
-            if stub_file.exists():
-                stub_file.unlink()
+        import services
+        importlib.reload(services)
+        result = services.database_service
+        assert result == "lite_db_stub"
 
 
 # ---------------------------------------------------------------------------
