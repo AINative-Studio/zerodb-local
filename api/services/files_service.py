@@ -12,6 +12,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from services.minio_service import minio_service
+from lite.config import is_lite_mode
+from lite.sql_compat import jsonb_cast_sql, now_iso, now_sql, parse_json_column, to_isoformat
 
 
 class FilesService:
@@ -81,9 +83,9 @@ class FilesService:
 
         # Step 2: Store metadata in PostgreSQL — reuse file_id as the row's id
         # so it stays consistent with the MinIO object path built above.
-        insert_query = text("""
+        insert_query = text(f"""
             INSERT INTO files (id, project_id, file_name, file_path, content_type, file_size, folder, metadata)
-            VALUES (:id, :project_id, :file_name, :file_path, :content_type, :file_size, :folder, CAST(:metadata AS jsonb))
+            VALUES (:id, :project_id, :file_name, :file_path, :content_type, :file_size, :folder, {jsonb_cast_sql(':metadata')})
             RETURNING id, file_name, file_path, content_type, file_size, folder, metadata, created_at, updated_at
         """)
 
@@ -110,9 +112,9 @@ class FilesService:
             "content_type": result.content_type,
             "file_size": result.file_size,
             "folder": result.folder,
-            "metadata": result.metadata or {},
-            "created_at": result.created_at.isoformat() if result.created_at else None,
-            "updated_at": result.updated_at.isoformat() if result.updated_at else None
+            "metadata": parse_json_column(result.metadata) or {},
+            "created_at": to_isoformat(result.created_at),
+            "updated_at": to_isoformat(result.updated_at)
         }
 
     async def download_file(
@@ -155,18 +157,24 @@ class FilesService:
         if not result:
             return None
 
-        # Step 2: Download from MinIO. bucket_name omitted — see upload_file's
-        # comment; minio_service.download_file defaults to its own bucket.
-        # It returns a raw urllib3 HTTPResponse (minio-py convention), not
-        # bytes — must read() it and release the connection explicitly.
+        # Step 2: Download from storage. bucket_name omitted — see
+        # upload_file's comment; minio_service.download_file defaults to
+        # its own bucket. In full mode this is a raw urllib3 HTTPResponse
+        # (minio-py convention) that needs an explicit release_conn(); in
+        # lite mode (FilesystemService) it's a plain BytesIO, which has no
+        # close()/release_conn() -- read() it and skip the methods it lacks.
         response = await minio_service.download_file(
             object_name=result.file_path
         )
         try:
             file_content = response.read()
         finally:
-            response.close()
-            response.release_conn()
+            close = getattr(response, "close", None)
+            if close:
+                close()
+            release_conn = getattr(response, "release_conn", None)
+            if release_conn:
+                release_conn()
 
         # Encode to base64 if requested
         if return_base64:
@@ -179,7 +187,7 @@ class FilesService:
             "content_type": result.content_type,
             "file_size": result.file_size,
             "folder": result.folder,
-            "metadata": result.metadata or {},
+            "metadata": parse_json_column(result.metadata) or {},
             "content": file_content
         }
 
@@ -242,9 +250,9 @@ class FilesService:
                 "content_type": row.content_type,
                 "file_size": row.file_size,
                 "folder": row.folder,
-                "metadata": row.metadata or {},
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                "metadata": parse_json_column(row.metadata) or {},
+                "created_at": to_isoformat(row.created_at),
+                "updated_at": to_isoformat(row.updated_at)
             }
             for row in results
         ]
@@ -289,9 +297,9 @@ class FilesService:
             "content_type": result.content_type,
             "file_size": result.file_size,
             "folder": result.folder,
-            "metadata": result.metadata or {},
-            "created_at": result.created_at.isoformat() if result.created_at else None,
-            "updated_at": result.updated_at.isoformat() if result.updated_at else None
+            "metadata": parse_json_column(result.metadata) or {},
+            "created_at": to_isoformat(result.created_at),
+            "updated_at": to_isoformat(result.updated_at)
         }
 
     async def delete_file(
@@ -329,19 +337,20 @@ class FilesService:
 
         file_path = result.file_path
 
-        # Soft delete from PostgreSQL
-        delete_query = text("""
+        # Soft delete from PostgreSQL (or SQLite in lite mode)
+        delete_query = text(f"""
             UPDATE files
-            SET deleted_at = NOW()
+            SET deleted_at = {now_sql()}
             WHERE project_id = :project_id
             AND id = :file_id
             RETURNING id
         """)
 
-        db.execute(
-            delete_query,
-            {"project_id": str(project_id), "file_id": file_id}
-        )
+        params = {"project_id": str(project_id), "file_id": file_id}
+        if is_lite_mode():
+            params["now"] = now_iso()
+
+        db.execute(delete_query, params)
 
         db.commit()
 

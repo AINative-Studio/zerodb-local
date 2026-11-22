@@ -11,6 +11,37 @@ from sqlalchemy.orm import Session
 
 from services.embeddings_service import embeddings_service
 from services.qdrant_service import qdrant_service
+from lite.config import is_lite_mode
+from lite.sql_compat import jsonb_cast_sql, new_id, now_iso, now_sql, parse_json_column, to_isoformat
+
+
+def _embedding_cast_sql(expr: str) -> str:
+    """
+    SQL fragment to store an embedding bind parameter.
+
+    PostgreSQL (pgvector) needs CAST(:x AS vector); SQLite has no vector
+    type at all -- the `vectors` table stores embeddings in a BLOB column
+    (see lite/db/schema_lite.sql), and qdrant_service (FAISS in lite mode)
+    is the actual similarity-search path, so the SQLite column is
+    write-only backup storage: pass the bind parameter through unchanged.
+    """
+    return expr if is_lite_mode() else f"CAST({expr} AS vector)"
+
+
+def _id_match_clause(column: str, lite: Optional[bool] = None) -> str:
+    """
+    SQL fragment matching a row by either its primary-key id or its
+    user-supplied vector_id column.
+
+    PostgreSQL needs `id::text = :x` to compare a uuid column against a
+    text bind parameter; SQLite has no `::text` cast operator, and its
+    `id` column is already stored as TEXT (see lite/db/schema_lite.sql),
+    so a direct equality comparison works without casting.
+    """
+    if lite is None:
+        lite = is_lite_mode()
+    id_expr = "id" if lite else "id::text"
+    return f"({id_expr} = :{column} OR vector_id = :{column})"
 
 
 class VectorService:
@@ -59,7 +90,10 @@ class VectorService:
         embeddings = await embeddings_service.generate_embeddings([document])
         embedding = embeddings[0]
 
-        # Step 2: Upsert in PostgreSQL
+        lite = is_lite_mode()
+        metadata_param = json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
+
+        # Step 2: Upsert in PostgreSQL (or SQLite in lite mode)
         if vector_id:
             # Check if vector exists (for update)
             check_query = text("""
@@ -79,63 +113,79 @@ class VectorService:
 
             if existing:
                 # Update existing vector
-                update_query = text("""
+                update_query = text(f"""
                     UPDATE vectors
-                    SET embedding = CAST(:embedding AS vector),
+                    SET embedding = {_embedding_cast_sql(':embedding')},
                         document = :document,
-                        metadata = CAST(:metadata AS jsonb),
-                        updated_at = NOW()
+                        metadata = {jsonb_cast_sql(':metadata', lite)},
+                        updated_at = {now_sql(lite)}
                     WHERE id = :id
                     RETURNING id, vector_id, document, metadata, created_at, updated_at
                 """)
-                result = db.execute(
-                    update_query,
-                    {
-                        "id": str(existing.id),
-                        "embedding": str(embedding),
-                        "document": document,
-                        "metadata": json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
-                    }
-                ).first()
+                params = {
+                    "id": str(existing.id),
+                    "embedding": str(embedding),
+                    "document": document,
+                    "metadata": metadata_param
+                }
+                if lite:
+                    params["now"] = now_iso()
+                result = db.execute(update_query, params).first()
                 pg_vector_id = str(existing.id)
             else:
-                # Insert new vector with custom ID
-                insert_query = text("""
-                    INSERT INTO vectors (project_id, namespace, vector_id, embedding, document, metadata)
-                    VALUES (:project_id, :namespace, :vector_id, CAST(:embedding AS vector), :document, CAST(:metadata AS jsonb))
+                # Insert new vector with custom ID. In lite mode `id` has no
+                # SQL-level default (Postgres's schema declares DEFAULT
+                # gen_random_uuid(), SQLite's does not), so generate it
+                # explicitly.
+                columns = "project_id, namespace, vector_id, embedding, document, metadata"
+                values = (
+                    f":project_id, :namespace, :vector_id, "
+                    f"{_embedding_cast_sql(':embedding')}, :document, {jsonb_cast_sql(':metadata', lite)}"
+                )
+                params = {
+                    "project_id": str(project_id),
+                    "namespace": namespace,
+                    "vector_id": vector_id,
+                    "embedding": str(embedding),
+                    "document": document,
+                    "metadata": metadata_param
+                }
+                if lite:
+                    columns = "id, " + columns
+                    values = ":id, " + values
+                    params["id"] = new_id()
+
+                insert_query = text(f"""
+                    INSERT INTO vectors ({columns})
+                    VALUES ({values})
                     RETURNING id, vector_id, document, metadata, created_at, updated_at
                 """)
-                result = db.execute(
-                    insert_query,
-                    {
-                        "project_id": str(project_id),
-                        "namespace": namespace,
-                        "vector_id": vector_id,
-                        "embedding": str(embedding),
-                        "document": document,
-                        "metadata": json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
-                    }
-                ).first()
+                result = db.execute(insert_query, params).first()
                 pg_vector_id = str(result.id)
         else:
             # Insert new vector (auto-generate ID)
-            insert_query = text("""
-                INSERT INTO vectors (project_id, namespace, embedding, document, metadata)
-                VALUES (:project_id, :namespace, CAST(:embedding AS vector), :document, CAST(:metadata AS jsonb))
+            columns = "project_id, namespace, embedding, document, metadata"
+            values = f":project_id, :namespace, {_embedding_cast_sql(':embedding')}, :document, {jsonb_cast_sql(':metadata', lite)}"
+            params = {
+                "project_id": str(project_id),
+                "namespace": namespace,
+                "embedding": str(embedding),
+                "document": document,
+                "metadata": metadata_param
+            }
+            if lite:
+                columns = "id, " + columns
+                values = ":id, " + values
+                params["id"] = new_id()
+
+            insert_query = text(f"""
+                INSERT INTO vectors ({columns})
+                VALUES ({values})
                 RETURNING id, vector_id, document, metadata, created_at, updated_at
             """)
-            result = db.execute(
-                insert_query,
-                {
-                    "project_id": str(project_id),
-                    "namespace": namespace,
-                    "embedding": str(embedding),
-                    "document": document,
-                    "metadata": json.dumps(metadata) if isinstance(metadata, dict) else str(metadata)
-                }
-            ).first()
+            result = db.execute(insert_query, params).first()
             pg_vector_id = str(result.id)
-            vector_id = str(result.id)  # Use PostgreSQL UUID as vector_id
+            vector_id = str(result.id)  # Use the row's UUID as vector_id
 
         db.commit()
 
@@ -161,8 +211,8 @@ class VectorService:
             "metadata": metadata,
             "namespace": namespace,
             "dimensions": len(embedding),
-            "created_at": result.created_at.isoformat() if result.created_at else None,
-            "updated_at": result.updated_at.isoformat() if result.updated_at else None
+            "created_at": to_isoformat(result.created_at),
+            "updated_at": to_isoformat(result.updated_at)
         }
 
     async def search_vectors(
@@ -280,10 +330,10 @@ class VectorService:
                 "id": str(row.id),
                 "vector_id": row.vector_id or str(row.id),
                 "document": row.document,
-                "metadata": row.metadata or {},
+                "metadata": parse_json_column(row.metadata) or {},
                 "namespace": row.namespace,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                "created_at": to_isoformat(row.created_at),
+                "updated_at": to_isoformat(row.updated_at)
             }
             for row in results
         ]
@@ -305,11 +355,15 @@ class VectorService:
         Returns:
             Vector info or None
         """
-        query = text("""
+        # id::text casts a uuid column to text for comparison in Postgres;
+        # SQLite has no ::text cast operator and its id column is already
+        # TEXT (see lite/db/schema_lite.sql), so the cast must be omitted.
+        id_clause = _id_match_clause("vector_id")
+        query = text(f"""
             SELECT id, vector_id, document, metadata, namespace, created_at, updated_at
             FROM vectors
             WHERE project_id = :project_id
-            AND (id::text = :vector_id OR vector_id = :vector_id)
+            AND {id_clause}
         """)
 
         result = db.execute(
@@ -324,10 +378,10 @@ class VectorService:
             "id": str(result.id),
             "vector_id": result.vector_id or str(result.id),
             "document": result.document,
-            "metadata": result.metadata or {},
+            "metadata": parse_json_column(result.metadata) or {},
             "namespace": result.namespace,
-            "created_at": result.created_at.isoformat() if result.created_at else None,
-            "updated_at": result.updated_at.isoformat() if result.updated_at else None
+            "created_at": to_isoformat(result.created_at),
+            "updated_at": to_isoformat(result.updated_at)
         }
 
     async def delete_vector(
@@ -347,11 +401,12 @@ class VectorService:
         Returns:
             True if deleted, False if not found
         """
-        # Delete from PostgreSQL
-        delete_query = text("""
+        # Delete from PostgreSQL (or SQLite in lite mode)
+        id_clause = _id_match_clause("vector_id")
+        delete_query = text(f"""
             DELETE FROM vectors
             WHERE project_id = :project_id
-            AND (id::text = :vector_id OR vector_id = :vector_id)
+            AND {id_clause}
             RETURNING id, namespace
         """)
 
@@ -365,12 +420,14 @@ class VectorService:
 
         db.commit()
 
-        # Delete from Qdrant
+        # Delete from Qdrant. NOTE: this previously passed a project_id=
+        # kwarg that neither QdrantService.delete_vector nor
+        # FAISSService.delete_vector accept (both take only vector_id/
+        # collection_name) -- a pre-existing bug independent of lite vs.
+        # full mode, fixed here because it blocks vector deletion
+        # end-to-end in both backends.
         qdrant_id = f"{project_id}_{result.namespace}_{vector_id}"
-        await qdrant_service.delete_vector(
-            project_id=project_id,
-            vector_id=qdrant_id
-        )
+        await qdrant_service.delete_vector(vector_id=qdrant_id)
 
         return True
 
@@ -422,15 +479,17 @@ class VectorService:
         }
 
 
-# Global instance
-def _create_vector_service():
-    try:
-        from lite.config import is_lite_mode
-        if is_lite_mode():
-            from lite.services.vector_service_lite import VectorServiceLite
-            return VectorServiceLite()
-    except ImportError:
-        pass
-    return VectorService()
-
-vector_service = _create_vector_service()
+# Global instance.
+#
+# Refs #47: this used to dispatch to lite.services.vector_service_lite's
+# VectorServiceLite in lite mode, but that class has a completely different
+# method signature (upsert_vector(project_id, vector_id, embedding, payload,
+# namespace, ...), no db/document/metadata params) than every router call
+# site in api/routers/vectors.py expects (upsert_vector(db=, project_id=,
+# document=, metadata=, namespace=, vector_id=)) -- the dispatch meant every
+# vector endpoint crashed with a TypeError in lite mode. VectorService
+# itself is now dialect-aware (see jsonb_cast_sql/_embedding_cast_sql/
+# _id_match_clause above) and already delegates the actual similarity
+# search to qdrant_service, which correctly resolves to FAISS in lite mode
+# -- so there is no longer a separate lite implementation to dispatch to.
+vector_service = VectorService()

@@ -11,6 +11,22 @@ from sqlalchemy.orm import Session
 
 from services.embeddings_service import embeddings_service
 from services.qdrant_service import qdrant_service
+from lite.config import is_lite_mode
+from lite.sql_compat import jsonb_cast_sql, new_id, parse_json_column, to_isoformat
+
+
+def _embedding_cast_sql(expr: str) -> str:
+    """
+    SQL fragment to store an embedding bind parameter.
+
+    PostgreSQL (pgvector) needs CAST(:x AS vector) to coerce the text
+    representation into its native vector type. SQLite has no vector type
+    at all -- the `memory` table stores embeddings in a BLOB column (see
+    lite/db/schema_lite.sql), and this service's own Qdrant/FAISS call is
+    the actual similarity-search path, so the SQLite column is write-only
+    backup storage: pass the bind parameter through unchanged.
+    """
+    return expr if is_lite_mode() else f"CAST({expr} AS vector)"
 
 
 class MemoryService:
@@ -61,25 +77,36 @@ class MemoryService:
         embeddings = await embeddings_service.generate_embeddings([content])
         embedding = embeddings[0]
 
-        # Step 2: Store in PostgreSQL
-        insert_query = text("""
-            INSERT INTO memory (project_id, session_id, agent_id, role, content, embedding, metadata)
-            VALUES (:project_id, :session_id, :agent_id, :role, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
+        # Step 2: Store in PostgreSQL. In lite mode `id` has no SQL-level
+        # default (Postgres's schema declares DEFAULT gen_random_uuid(),
+        # SQLite's does not), so generate it explicitly.
+        lite = is_lite_mode()
+        columns = "project_id, session_id, agent_id, role, content, embedding, metadata"
+        values = (
+            f":project_id, :session_id, :agent_id, :role, :content, "
+            f"{_embedding_cast_sql(':embedding')}, {jsonb_cast_sql(':metadata', lite)}"
+        )
+        params = {
+            "project_id": str(project_id),
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "role": role,
+            "content": content,
+            "embedding": str(embedding),
+            "metadata": json.dumps(metadata or {})
+        }
+        if lite:
+            columns = "id, " + columns
+            values = ":id, " + values
+            params["id"] = new_id()
+
+        insert_query = text(f"""
+            INSERT INTO memory ({columns})
+            VALUES ({values})
             RETURNING id, session_id, agent_id, role, content, metadata, created_at
         """)
 
-        result = db.execute(
-            insert_query,
-            {
-                "project_id": str(project_id),
-                "session_id": session_id,
-                "agent_id": agent_id,
-                "role": role,
-                "content": content,
-                "embedding": str(embedding),
-                "metadata": json.dumps(metadata or {})
-            }
-        ).first()
+        result = db.execute(insert_query, params).first()
 
         db.commit()
 
@@ -108,8 +135,8 @@ class MemoryService:
             "agent_id": result.agent_id,
             "role": result.role,
             "content": result.content,
-            "metadata": result.metadata or {},
-            "created_at": result.created_at.isoformat() if result.created_at else None
+            "metadata": parse_json_column(result.metadata) or {},
+            "created_at": to_isoformat(result.created_at)
         }
 
     async def search_memory(
@@ -239,8 +266,8 @@ class MemoryService:
                 "agent_id": row.agent_id,
                 "role": row.role,
                 "content": row.content,
-                "metadata": row.metadata or {},
-                "created_at": row.created_at.isoformat() if row.created_at else None
+                "metadata": parse_json_column(row.metadata) or {},
+                "created_at": to_isoformat(row.created_at)
             }
             for row in reversed(results)
         ]
@@ -341,8 +368,8 @@ class MemoryService:
                 "session_id": row.session_id,
                 "agent_id": row.agent_id,
                 "message_count": row.message_count,
-                "first_message_at": row.first_message_at.isoformat() if row.first_message_at else None,
-                "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None
+                "first_message_at": to_isoformat(row.first_message_at),
+                "last_message_at": to_isoformat(row.last_message_at)
             }
             for row in results
         ]
@@ -392,14 +419,16 @@ class MemoryService:
 
         db.commit()
 
-        # Delete from Qdrant
+        # Delete from Qdrant. NOTE: this previously passed a project_id=
+        # kwarg that neither QdrantService.delete_vector nor
+        # FAISSService.delete_vector accept (both take only vector_id/
+        # collection_name) -- a pre-existing bug independent of lite vs.
+        # full mode, fixed here for the same reason as vector_service.py's
+        # delete_vector.
         for memory_id in memory_ids:
             qdrant_id = f"{project_id}_memory_{memory_id}"
             try:
-                await qdrant_service.delete_vector(
-                    project_id=project_id,
-                    vector_id=qdrant_id
-                )
+                await qdrant_service.delete_vector(vector_id=qdrant_id)
             except Exception:
                 pass  # Continue even if Qdrant delete fails
 
