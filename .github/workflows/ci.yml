@@ -65,9 +65,22 @@ jobs:
           pip install pyright
           pyright zerodb_local/ --pythonversion ${{ matrix.python-version }} || true
 
+      # Refs #49: --cov was scoped to zerodb_local/ only -- after the repo
+      # flatten (#1) that package is just two thin wrapper files (cli.py,
+      # server.py), while the real tested code lives in api/, lite/, cli/
+      # (see pyproject.toml's wheel packages list). Scoping coverage to
+      # zerodb_local/ alone made --cov-fail-under=70 fail on every run
+      # (including main), regardless of actual test health, since it only
+      # ever measured ~56 statements. Measuring all four shipped packages
+      # gives a real total of ~7.8% (lite/ itself is 86-99% covered; api/
+      # and most of cli/ have little to no test coverage yet -- tracked
+      # separately in #50). Threshold lowered to match reality (with a
+      # small margin below the current 7.8% baseline): this gate should
+      # catch future regressions below today's real coverage, not
+      # silently fail unconditionally like before.
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --cov=zerodb_local --cov-report=term-missing --cov-fail-under=70
+          python -m pytest tests/ -v --cov=zerodb_local --cov=api --cov=lite --cov=cli --cov-report=term-missing --cov-fail-under=7
 
   build:
     name: Build distribution
