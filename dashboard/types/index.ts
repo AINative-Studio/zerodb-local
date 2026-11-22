@@ -71,13 +71,11 @@ export interface Event {
 
 export interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unhealthy'
-  services: {
-    postgres: ServiceHealth
-    qdrant: ServiceHealth
-    minio: ServiceHealth
-    redpanda: ServiceHealth
-    embeddings: ServiceHealth
-  }
+  backend?: 'lite' | 'full'
+  // Lite mode reports {sqlite, faiss, filesystem}; full mode reports
+  // {postgres, qdrant, minio, redpanda, embeddings}. Keyed as a record
+  // since the actual key set depends on `backend`.
+  services: Record<string, ServiceHealth>
   summary: {
     healthy: number
     total: number
