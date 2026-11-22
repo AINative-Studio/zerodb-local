@@ -4,7 +4,25 @@ import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '@/services/api-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Database, HardDrive, Activity, AlertCircle, CheckCircle } from 'lucide-react'
+import { Database, HardDrive, Activity, AlertCircle, CheckCircle, FolderOpen } from 'lucide-react'
+
+// Lite mode (SQLite + FAISS + filesystem, zero-infrastructure default) and
+// full mode (PostgreSQL + Qdrant + MinIO + RedPanda + embeddings, Docker
+// stack) report entirely different service keys in /health -- render
+// whichever set actually matches `backend` instead of assuming full mode.
+const FULL_MODE_SERVICES = [
+  { key: 'postgres', name: 'PostgreSQL', icon: Database, description: 'Primary database' },
+  { key: 'qdrant', name: 'Qdrant', icon: Activity, description: 'Vector search engine' },
+  { key: 'minio', name: 'MinIO', icon: HardDrive, description: 'Object storage' },
+  { key: 'redpanda', name: 'RedPanda', icon: Activity, description: 'Event streaming' },
+  { key: 'embeddings', name: 'Embeddings', icon: Activity, description: 'Local embeddings (BAAI BGE)' },
+] as const
+
+const LITE_MODE_SERVICES = [
+  { key: 'sqlite', name: 'SQLite', icon: Database, description: 'Primary database' },
+  { key: 'faiss', name: 'FAISS', icon: Activity, description: 'Vector search engine' },
+  { key: 'filesystem', name: 'Filesystem', icon: FolderOpen, description: 'Local file storage' },
+] as const
 
 export default function DashboardPage() {
   const { data: health, isLoading, error } = useQuery({
@@ -78,7 +96,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-sm text-gray-600">
-              {health?.summary.healthy} of {health?.summary.total} services operational
+              {health?.summary?.healthy ?? 0} of {health?.summary?.total ?? 0} services operational
             </div>
           </CardContent>
         </Card>
@@ -86,41 +104,16 @@ export default function DashboardPage() {
 
       {/* Service Status Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-        <ServiceCard
-          name="PostgreSQL"
-          status={health?.services.postgres.status || 'unhealthy'}
-          latency={health?.services.postgres.latency_ms}
-          icon={<Database className="h-5 w-5" />}
-          description="Primary database"
-        />
-        <ServiceCard
-          name="Qdrant"
-          status={health?.services.qdrant.status || 'unhealthy'}
-          latency={health?.services.qdrant.latency_ms}
-          icon={<Activity className="h-5 w-5" />}
-          description="Vector search engine"
-        />
-        <ServiceCard
-          name="MinIO"
-          status={health?.services.minio.status || 'unhealthy'}
-          latency={health?.services.minio.latency_ms}
-          icon={<HardDrive className="h-5 w-5" />}
-          description="Object storage"
-        />
-        <ServiceCard
-          name="RedPanda"
-          status={health?.services.redpanda.status || 'unhealthy'}
-          latency={health?.services.redpanda.latency_ms}
-          icon={<Activity className="h-5 w-5" />}
-          description="Event streaming"
-        />
-        <ServiceCard
-          name="Embeddings"
-          status={health?.services.embeddings.status || 'unhealthy'}
-          latency={health?.services.embeddings.latency_ms}
-          icon={<Activity className="h-5 w-5" />}
-          description="Local embeddings (BAAI BGE)"
-        />
+        {(health?.backend === 'full' ? FULL_MODE_SERVICES : LITE_MODE_SERVICES).map((service) => (
+          <ServiceCard
+            key={service.key}
+            name={service.name}
+            status={health?.services?.[service.key]?.status || 'unhealthy'}
+            latency={health?.services?.[service.key]?.latency_ms}
+            icon={<service.icon className="h-5 w-5" />}
+            description={service.description}
+          />
+        ))}
       </div>
 
       {/* Quick Stats */}
