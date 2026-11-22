@@ -4,7 +4,7 @@ Handles event publishing and consumption using RedPanda (Kafka-compatible)
 """
 import os
 import json
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
 from uuid import UUID
 from datetime import datetime
 
@@ -15,6 +15,9 @@ try:
     _KAFKA_AVAILABLE = True
 except ImportError:
     _KAFKA_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from kafka import KafkaProducer, KafkaConsumer
 
 
 class RedPandaService:
@@ -45,7 +48,7 @@ class RedPandaService:
                 )
         return self._admin_client
 
-    def _get_producer(self) -> KafkaProducer:
+    def _get_producer(self) -> "KafkaProducer":
         """Get or create Kafka producer"""
         if self._producer is None:
             self._producer = KafkaProducer(
@@ -217,7 +220,7 @@ class RedPandaService:
         group_id: str = None,
         topic_name: str = None,
         auto_offset_reset: str = "earliest"
-    ) -> KafkaConsumer:
+    ) -> "KafkaConsumer":
         """
         Create event consumer
 
