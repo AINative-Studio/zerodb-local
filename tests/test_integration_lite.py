@@ -196,7 +196,7 @@ class TestPackageImports:
 class TestLiteServicesImportable:
     """Verify lite backend services can be instantiated."""
 
-    def test_database_service_lite_importable(self, tmp_path):
+    async def test_database_service_lite_importable(self, tmp_path):
         """
         GIVEN ZERODB_BACKEND=lite
         WHEN DatabaseServiceLite is imported
@@ -213,7 +213,7 @@ class TestLiteServicesImportable:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         svc = mod.DatabaseServiceLite(db_path=str(tmp_path / "test.db"))
-        health = svc.health_check()
+        health = await svc.health_check()
         assert health["status"] in ("healthy", "ok")
 
     def test_faiss_service_importable(self, tmp_path):
