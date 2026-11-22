@@ -8,6 +8,16 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+# Same root cause/scope note as test_vectors.py's _NEEDS_EMBEDDINGS_SERVICE.
+# Refs #50.
+_NEEDS_EMBEDDINGS_SERVICE = (
+    "needs a reachable embeddings microservice (EMBEDDINGS_URL, default "
+    "http://embeddings:8001) -- only resolvable inside docker-compose's "
+    "network and out of scope to stand up for #50's test-wiring fix. Run "
+    "`docker-compose up -d embeddings` and point EMBEDDINGS_URL at it to "
+    "exercise this for real."
+)
+
 
 @pytest.mark.integration
 class TestAuthenticationModule:
@@ -128,6 +138,7 @@ class TestRouterAuthenticationIntegration:
         # Verify it's using the local user UUID
         assert data["user_id"] == "00000000-0000-0000-0000-000000000001"
 
+    @pytest.mark.skip(reason=_NEEDS_EMBEDDINGS_SERVICE)
     def test_vectors_router_authentication(self, client: TestClient, sample_project_data):
         """Test vectors router has authentication dependency"""
         # Create a project first
@@ -149,6 +160,7 @@ class TestRouterAuthenticationIntegration:
         # Should work with local auth
         assert response.status_code in [200, 201]
 
+    @pytest.mark.skip(reason=_NEEDS_EMBEDDINGS_SERVICE)
     def test_memory_router_authentication(self, client: TestClient, sample_project_data, sample_memory_data):
         """Test memory router has authentication dependency"""
         # Create a project first
@@ -200,9 +212,11 @@ class TestRouterAuthenticationIntegration:
         project_response = client.post("/v1/projects", json=sample_project_data)
         project_id = project_response.json()["id"]
 
-        # Test event create endpoint
+        # Test event create endpoint. The real route has no /create
+        # suffix (routers/events.py registers it at the bare prefix, same
+        # as test_events.py uses). Refs #50.
         response = client.post(
-            f"/v1/projects/{project_id}/database/events/create",
+            f"/v1/projects/{project_id}/database/events",
             json=sample_event_data
         )
 
@@ -217,10 +231,10 @@ class TestAuthenticationImportPaths:
     def test_projects_router_imports(self):
         """Verify projects router imports from auth module"""
         import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'api', 'routers'))
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'routers'))
 
         # Read the projects.py file
-        projects_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'projects.py')
+        projects_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'projects.py')
         with open(projects_file, 'r') as f:
             content = f.read()
 
@@ -232,7 +246,7 @@ class TestAuthenticationImportPaths:
 
     def test_vectors_router_imports(self):
         """Verify vectors router imports from auth module"""
-        vectors_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'vectors.py')
+        vectors_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'vectors.py')
         with open(vectors_file, 'r') as f:
             content = f.read()
 
@@ -241,7 +255,7 @@ class TestAuthenticationImportPaths:
 
     def test_tables_router_imports(self):
         """Verify tables router imports from auth module"""
-        tables_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'tables.py')
+        tables_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'tables.py')
         with open(tables_file, 'r') as f:
             content = f.read()
 
@@ -250,7 +264,7 @@ class TestAuthenticationImportPaths:
 
     def test_memory_router_imports(self):
         """Verify memory router imports from auth module"""
-        memory_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'memory.py')
+        memory_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'memory.py')
         with open(memory_file, 'r') as f:
             content = f.read()
 
@@ -259,7 +273,7 @@ class TestAuthenticationImportPaths:
 
     def test_files_router_imports(self):
         """Verify files router imports from auth module"""
-        files_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'files.py')
+        files_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'files.py')
         with open(files_file, 'r') as f:
             content = f.read()
 
@@ -268,7 +282,7 @@ class TestAuthenticationImportPaths:
 
     def test_events_router_imports(self):
         """Verify events router imports from auth module"""
-        events_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'events.py')
+        events_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'events.py')
         with open(events_file, 'r') as f:
             content = f.read()
 
@@ -277,7 +291,7 @@ class TestAuthenticationImportPaths:
 
     def test_sync_state_router_imports(self):
         """Verify sync_state router imports from auth module"""
-        sync_state_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'sync_state.py')
+        sync_state_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'sync_state.py')
         with open(sync_state_file, 'r') as f:
             content = f.read()
 
@@ -286,7 +300,7 @@ class TestAuthenticationImportPaths:
 
     def test_schema_diff_router_imports(self):
         """Verify schema_diff router imports from auth module"""
-        schema_diff_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'schema_diff.py')
+        schema_diff_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'schema_diff.py')
         with open(schema_diff_file, 'r') as f:
             content = f.read()
 
@@ -295,7 +309,7 @@ class TestAuthenticationImportPaths:
 
     def test_change_detection_router_imports(self):
         """Verify change_detection router imports from auth module"""
-        change_detection_file = os.path.join(os.path.dirname(__file__), '..', 'api', 'routers', 'change_detection.py')
+        change_detection_file = os.path.join(os.path.dirname(__file__), '..', 'routers', 'change_detection.py')
         with open(change_detection_file, 'r') as f:
             content = f.read()
 

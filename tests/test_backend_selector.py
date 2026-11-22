@@ -188,12 +188,23 @@ class TestServiceLazyLoadingLiteMode:
 
     def test_lite_mode_routes_to_lite_module(self, tmp_path):
         """WHEN lite mode is active THEN __getattr__ loads from lite.services.*."""
-        # Create a stub lite service module for the test
+        # Stub out the REAL lite/services/database_service_lite.py (and
+        # __init__.py) for the duration of this test, then restore their
+        # original content in `finally` -- unconditionally, including on
+        # an early pytest.skip(), which still executes `finally`. The
+        # previous version of this test overwrote these files and only
+        # ever deleted the stub afterward, never restoring __init__.py's
+        # real content and permanently destroying database_service_lite.py
+        # (a real production module) on every run of this test file,
+        # regardless of pass/fail/skip. Refs #50.
         lite_services_dir = Path(__file__).resolve().parent.parent / "lite" / "services"
         lite_services_dir.mkdir(parents=True, exist_ok=True)
 
         init_file = lite_services_dir / "__init__.py"
         stub_file = lite_services_dir / "database_service_lite.py"
+
+        original_init = init_file.read_text() if init_file.exists() else None
+        original_stub = stub_file.read_text() if stub_file.exists() else None
 
         # Always write a clean stub (overwrite any stale source)
         init_file.write_text("")
@@ -220,9 +231,23 @@ class TestServiceLazyLoadingLiteMode:
             result = services.database_service
             assert result == "lite_db_stub"
         finally:
-            # Clean up stub file
-            if stub_file.exists():
-                stub_file.unlink()
+            # Restore the real files exactly as they were (or remove them
+            # if they didn't exist before this test ran).
+            if original_init is None:
+                init_file.unlink(missing_ok=True)
+            else:
+                init_file.write_text(original_init)
+
+            if original_stub is None:
+                stub_file.unlink(missing_ok=True)
+            else:
+                stub_file.write_text(original_stub)
+
+            # Force the next import of these modules to re-read the
+            # restored source rather than keep serving the stub from the
+            # module cache.
+            sys.modules.pop("lite.services.database_service_lite", None)
+            sys.modules.pop("services", None)
 
 
 # ---------------------------------------------------------------------------

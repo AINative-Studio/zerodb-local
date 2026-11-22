@@ -43,6 +43,19 @@ def api_dir_path():
     return api_dir
 
 
+@pytest.fixture(scope="module")
+def repo_root_path():
+    """
+    Get path to the repo root -- the Dockerfile's actual build context.
+
+    api/Dockerfile's own comment says "build context is repo root" (it
+    COPYs both api/ and the sibling lite/ into the image), so `docker
+    build` must be invoked with the repo root as cwd, not api/ -- running
+    it from api/ can't find ../lite/. Refs #50.
+    """
+    return Path(__file__).parent.parent.parent
+
+
 @pytest.mark.docker
 class TestDockerBuild:
     """Test suite for Docker build process"""
@@ -149,23 +162,24 @@ class TestDockerBuild:
 
     @pytest.mark.slow
     @pytest.mark.requires_docker
-    def test_docker_image_builds_successfully(self, docker_image_name, api_dir_path):
+    def test_docker_image_builds_successfully(self, docker_image_name, repo_root_path):
         """
         GIVEN: Valid Dockerfile and application code
         WHEN: Building Docker image
         THEN: Build should complete without errors
         """
-        # Build Docker image
+        # Build Docker image. Context must be the repo root, not api/ --
+        # api/Dockerfile COPYs the sibling lite/ directory too. Refs #50.
         build_cmd = [
             "docker", "build",
             "-t", docker_image_name,
-            "-f", "Dockerfile",
+            "-f", "api/Dockerfile",
             "."
         ]
 
         result = subprocess.run(
             build_cmd,
-            cwd=api_dir_path,
+            cwd=repo_root_path,
             capture_output=True,
             text=True,
             timeout=300  # 5 minutes timeout

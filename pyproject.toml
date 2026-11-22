@@ -32,6 +32,13 @@ dependencies = [
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "python-multipart>=0.0.6",
+    # Used unconditionally by api/services/cloud_client.py (local-to-cloud
+    # sync retries), imported at `api.main` startup regardless of
+    # lite/full backend mode -- not a full-mode-only dependency, so it
+    # belongs in core deps rather than the `full` extra. Was previously
+    # only declared in api/requirements.txt, never in this pyproject.toml,
+    # so a plain `pip install -e '.[lite,dev]'` install lacked it. Refs #50.
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
@@ -98,8 +105,31 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# api/tests/ (19 files) kept physically separate from the top-level tests/
+# rather than merged into it (Refs #50): it tests a different thing -- the
+# real FastAPI app (api/main.py and its routers) via its own conftest.py,
+# which in turn depends on api/'s bare-import convention (api/ as a
+# sys.path root, matching how api/Dockerfile actually runs it in
+# production) -- while top-level tests/ tests lite/* and other packages
+# via the repo's normal dotted-import convention and never imports
+# anything from api/ today. Merging them would mean either converting one
+# suite's imports to match the other's convention (same large blast radius
+# the issue weighs against for production code) or keeping two incompatible
+# per-directory conftest.py setups side by side anyway -- no real benefit
+# over just listing both directories here.
+testpaths = ["tests", "api/tests"]
 asyncio_mode = "auto"
+# Required once api/tests/ joined testpaths alongside tests/: both
+# directories are `__init__.py` packages named "tests" (api/ itself has no
+# __init__.py, so pytest's prepend import-mode can't climb high enough to
+# disambiguate "api.tests.conftest" from the top-level "tests.conftest" --
+# both resolve to the same module name "tests.conftest" and pytest refuses
+# the collision with ImportPathMismatchError). importlib mode imports each
+# test/conftest file by its file path instead of inferring a dotted module
+# name from directory structure, which sidesteps the collision without
+# requiring either suite to change its layout or import convention.
+# Refs #50.
+addopts = "--import-mode=importlib"
 
 [tool.ruff]
 # Matches the selection/ignore .github/workflows/ci.yml's "Lint (ruff)" step

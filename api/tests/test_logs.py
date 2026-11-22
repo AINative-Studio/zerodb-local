@@ -117,21 +117,27 @@ class TestLogsRouter:
 
     def test_get_logs_validation_errors(self, client: TestClient):
         """Test validation errors for invalid parameters"""
+        # This app's error middleware (middleware/error_handler.py)
+        # rewrites FastAPI's default 422 for a request-validation error
+        # into 400 -- aligning to production's actual status code rather
+        # than changing middleware behavior as a side effect of a
+        # test-wiring fix. Refs #50.
+
         # Invalid limit (too high)
         response = client.get("/v1/logs?limit=10000")
-        assert response.status_code == 422
+        assert response.status_code == 400
 
         # Invalid limit (too low)
         response = client.get("/v1/logs?limit=0")
-        assert response.status_code == 422
+        assert response.status_code == 400
 
         # Invalid time range (too high)
         response = client.get("/v1/logs?since_minutes=5000")
-        assert response.status_code == 422
+        assert response.status_code == 400
 
         # Invalid time range (too low)
         response = client.get("/v1/logs?since_minutes=0")
-        assert response.status_code == 422
+        assert response.status_code == 400
 
     def test_get_available_services(self, client: TestClient):
         """Test getting list of available services"""

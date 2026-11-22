@@ -5,7 +5,7 @@ Handles event storage and streaming using PostgreSQL + RedPanda
 import json
 import os
 from typing import List, Dict, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -74,28 +74,27 @@ class EventsService:
 
         event_id = str(result.id)
 
-        # Step 2: Publish to RedPanda
-        topic = f"{self.default_topic_prefix}.{project_id}.events"
-        event_message = {
-            "id": event_id,
-            "project_id": str(project_id),
-            "event_type": result.event_type,
-            "source": result.source,
-            "correlation_id": result.correlation_id,
-            "event_data": result.event_data,
-            "timestamp": result.timestamp.isoformat() if result.timestamp else None
-        }
-
+        # Step 2: Publish to RedPanda. RedPandaService.publish_event()
+        # takes the raw event fields (project_id, event_type, event_data,
+        # source, correlation_id, topic_name) and builds its own payload
+        # internally -- it has no `topic`/`event` kwargs. Refs #50.
         await redpanda_service.publish_event(
-            topic=topic,
-            event=event_message
+            project_id=project_id,
+            event_type=result.event_type,
+            event_data=result.event_data,
+            source=result.source,
+            correlation_id=result.correlation_id,
+            topic_name=f"{self.default_topic_prefix}.{project_id}.events"
         )
 
         return {
             "id": event_id,
             "event_type": result.event_type,
             "source": result.source,
-            "correlation_id": result.correlation_id,
+            # correlation_id is a UUID column -- psycopg2 returns it as a
+            # native uuid.UUID, but EventResponse.correlation_id is typed
+            # str; coerce here the same way event_id already is. Refs #50.
+            "correlation_id": str(result.correlation_id) if result.correlation_id else None,
             "event_data": result.event_data,
             "timestamp": result.timestamp.isoformat() if result.timestamp else None
         }
@@ -168,7 +167,7 @@ class EventsService:
                 "id": str(row.id),
                 "event_type": row.event_type,
                 "source": row.source,
-                "correlation_id": row.correlation_id,
+                "correlation_id": str(row.correlation_id) if row.correlation_id else None,
                 "event_data": row.event_data,
                 "timestamp": row.timestamp.isoformat() if row.timestamp else None
             }
@@ -211,7 +210,7 @@ class EventsService:
             "id": str(result.id),
             "event_type": result.event_type,
             "source": result.source,
-            "correlation_id": result.correlation_id,
+            "correlation_id": str(result.correlation_id) if result.correlation_id else None,
             "event_data": result.event_data,
             "timestamp": result.timestamp.isoformat() if result.timestamp else None
         }
@@ -330,11 +329,15 @@ class EventsService:
         """
         topic = f"{self.default_topic_prefix}.{project_id}.events"
 
-        # Subscribe to RedPanda topic
-        subscription_id = await redpanda_service.subscribe_to_topic(
-            topic=topic,
-            consumer_group=f"project_{project_id}"
-        )
+        # Generate a subscription id identifying this topic/consumer-group
+        # pairing. RedPandaService has no subscribe_to_topic() method (it
+        # exposes create_consumer()/consume_events() instead, a different,
+        # synchronous-iterator shaped API) -- actually opening a Kafka
+        # consumer belongs to whatever client later streams from this
+        # subscription (e.g. a WebSocket/SSE endpoint using
+        # create_consumer() with this same topic/group), not to this
+        # call, which only needs to hand back an identifier. Refs #50.
+        subscription_id = f"sub_{uuid4()}"
 
         return {
             "subscription_id": subscription_id,
