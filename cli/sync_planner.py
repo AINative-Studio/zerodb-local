@@ -51,6 +51,14 @@ class SyncPlan:
         }
 
         for op in self.operations:
+            # Plan-level housekeeping steps (e.g. "update_watermarks",
+            # "mark_synced") have operation=None -- they aren't a
+            # create/update/delete/upsert data operation, so they're
+            # already reflected in 'total' above and shouldn't get their
+            # own None-keyed summary entry (which crashes callers that
+            # assume every summary key is a real operation name).
+            if op.operation is None:
+                continue
             summary[op.operation] = summary.get(op.operation, 0) + 1
 
         return summary
