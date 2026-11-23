@@ -15,12 +15,12 @@ describe('Badge Component', () => {
 
   it('applies success variant classes', () => {
     const { container } = render(<Badge variant="success">Success</Badge>)
-    expect(container.firstChild).toHaveClass('bg-green-500')
+    expect(container.firstChild).toHaveClass('bg-success-muted')
   })
 
   it('applies warning variant classes', () => {
     const { container } = render(<Badge variant="warning">Warning</Badge>)
-    expect(container.firstChild).toHaveClass('bg-yellow-500')
+    expect(container.firstChild).toHaveClass('bg-warning-muted')
   })
 
   it('applies destructive variant classes', () => {
