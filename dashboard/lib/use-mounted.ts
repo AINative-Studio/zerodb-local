@@ -9,6 +9,10 @@ import * as React from 'react'
  */
 export function useMounted(): boolean {
   const [mounted, setMounted] = React.useState(false)
+  // This is the one-shot false->true hydration flag the rule's own
+  // cascading-render concern doesn't apply to: it fires exactly once per
+  // mount, with no dependency that could trigger a further re-render loop.
+  /* eslint-disable-next-line react-hooks/set-state-in-effect */
   React.useEffect(() => setMounted(true), [])
   return mounted
 }

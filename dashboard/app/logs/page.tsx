@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Download, RefreshCw, Search } from 'lucide-react'
 import { apiClient } from '@/services/api-client'

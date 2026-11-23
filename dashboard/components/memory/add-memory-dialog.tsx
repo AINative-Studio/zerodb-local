@@ -57,10 +57,16 @@ export function AddMemoryDialog({
   React.useEffect(() => {
     if (!open) return
     const start = blank(defaults)
+    // Resetting a controlled dialog's form state when it opens, keyed on
+    // the `open` prop itself: a documented, intended use of this pattern,
+    // not the derived-state anti-pattern the rule targets. getFormMode()
+    // reads localStorage, an impure read render must not perform.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setForm(start)
     setMode(getFormMode())
     setJson(JSON.stringify(buildStoreRequest(start), null, 2))
     setError(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     // defaults are read once per open
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
