@@ -340,6 +340,52 @@ class TestVectorsCRUD:
         )
         assert get_after_delete.status_code == 404
 
+    def test_list_vectors_with_no_namespace_filter_returns_all_namespaces(self, lite_server, project_id):
+        """
+        Dashboard redesign e2e verification (docs/features/DASHBOARD_REDESIGN.md)
+        caught this live: the dashboard's Vectors page has an "All namespaces"
+        filter that, when empty, is meant to omit the namespace param entirely
+        -- GET /vectors with no namespace query param should return vectors
+        from every namespace in the project, not just "default". Confirmed
+        live: a vector upserted into namespace "faq" was correctly stored and
+        directly retrievable (?namespace=faq, or by ID), but GET /vectors with
+        no namespace param at all came back empty -- because the router
+        declares `namespace: str = "default"`, so an omitted param silently
+        becomes the literal string "default" rather than "no filter", and the
+        underlying SQL always has `AND namespace = :namespace` with no
+        no-filter branch. The project's own usage counter correctly showed
+        vectors=1, proving the data was there and only the list query was
+        broken.
+        """
+        upsert_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
+            json={"document": "refunds within 30 days", "namespace": "faq", "metadata": {}},
+            timeout=90,
+        )
+        assert upsert_resp.status_code == 200, upsert_resp.text
+        vector_id = upsert_resp.json()["id"]
+
+        # Sanity: explicitly filtering by the real namespace finds it.
+        filtered = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors",
+            params={"namespace": "faq"},
+            timeout=10,
+        )
+        assert filtered.status_code == 200
+        assert any(v["id"] == vector_id for v in filtered.json())
+
+        # The actual bug: omitting namespace entirely (the dashboard's "All
+        # namespaces" state) must also find it, not silently filter to
+        # "default" and hide every other namespace's vectors.
+        unfiltered = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors",
+            timeout=10,
+        )
+        assert unfiltered.status_code == 200
+        assert any(v["id"] == vector_id for v in unfiltered.json()), (
+            "GET /vectors with no namespace param must return vectors from "
+            "every namespace, not silently default to namespace='default'"
+        )
 
 class TestEventsCRUD:
     """Refs #47: events_service hardcoded CAST(... AS jsonb) and crashed on

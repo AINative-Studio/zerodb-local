@@ -333,41 +333,42 @@ class VectorService:
         self,
         db: Session,
         project_id: UUID,
-        namespace: str = "default",
+        namespace: Optional[str] = None,
         skip: int = 0,
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """
-        List vectors with pagination
+        List vectors with pagination, optionally filtered to one namespace
 
         Args:
             db: Database session
             project_id: Project UUID
-            namespace: Vector namespace
+            namespace: Vector namespace to filter by. None lists across all namespaces.
             skip: Number to skip (pagination)
             limit: Max results
 
         Returns:
             List of vectors
         """
-        query = text("""
+        namespace_clause = "AND namespace = :namespace" if namespace is not None else ""
+        query = text(f"""
             SELECT id, vector_id, document, metadata, namespace, created_at, updated_at
             FROM vectors
             WHERE project_id = :project_id
-            AND namespace = :namespace
+            {namespace_clause}
             ORDER BY created_at DESC
             LIMIT :limit OFFSET :offset
         """)
 
-        results = db.execute(
-            query,
-            {
-                "project_id": str(project_id),
-                "namespace": namespace,
-                "limit": limit,
-                "offset": skip
-            }
-        ).fetchall()
+        params = {
+            "project_id": str(project_id),
+            "limit": limit,
+            "offset": skip
+        }
+        if namespace is not None:
+            params["namespace"] = namespace
+
+        results = db.execute(query, params).fetchall()
 
         return [
             {
