@@ -4,7 +4,7 @@ Refs #67 · Branch `feat/67-dashboard-redesign`
 
 This branch takes the ZeroLocal dashboard from a read-only viewer to a working tool: every resource can be created from the UI, every page is fully built (no "coming soon"), it uses the ZeroDB brand, and it has light and dark themes. This doc is for whoever finishes it locally. It says what's built, what was decided, where the design and the API disagree, and what's left.
 
-Screenshots of the built pages (light, dark, phone, dialogs) are in [`docs/design/dashboard-redesign/`](../design/dashboard-redesign/). They were taken from a production build with fixture API data, not a live backend.
+Screenshots of the 10 built pages, light and dark, are in [`docs/design/dashboard-redesign/`](../design/dashboard-redesign/), taken this session (Nov 22) against a real `zerodb serve` lite-mode backend with real data. The phone-width and dialog screenshots there are from an earlier pass against fixture API data and were not retaken this session.
 
 ## Decisions (design review, Nov 22, 2026)
 
@@ -61,7 +61,31 @@ Every API router was checked against the dashboard. Result:
 
 Also fixed: `api/tests/test_qdrant_startup.py` was already failing on `main` (it expected `6333:6333`, the file has had a port variable for a while).
 
-**Found while testing, not fixed (API bugs in lite mode):** `GET /sync/status` fails with `no such table: sync_state` and `GET /sync/history` with `no such column: sync_history.sync_id` on a fresh lite database. The Sync page shows those errors until the lite migrations create these tables. Same family as #47.
+## End-to-end pass against a real lite-mode API (this session)
+
+Merged `main` in (brings #47's lite-mode CRUD fix, plus #64/#66/#71), then ran the full walkthrough against a real `zerodb serve` (lite mode) and `npm run dev` dashboard, driven by real browser automation, in both light and dark theme.
+
+**Fixed as part of this pass** (own issue/branch/PR each, TDD -- failing test first):
+- **#73**: lite-mode `sync_history` table was missing `sync_id` and several other ORM-expected columns (`direction`, `mode`, `bytes_transferred`, `error_message`, `error_stack`, `snapshot_id`, `updated_at`) -- `GET /sync/history` 503'd on every lite install. `sync_state` already matched its ORM model and needed no change. Fixed in `lite/db/schema_lite.sql`.
+- **#75**: `zerodb serve` (the README's own documented quickstart) crashed immediately with `ModuleNotFoundError: No module named 'app'` -- `cli/commands/serve.py` pointed uvicorn at a package (`app.main:app`) that doesn't exist anywhere. The existing test suite had mocked this exact call and asserted the wrong module string, so it stayed green while the command was completely broken for every user. Fixed to resolve and `chdir` into the real `api/` package.
+- **#77**: Memory page's **Add memory** dialog stored a memory successfully with a blank Session field, but the memory then vanished permanently -- `api/services/memory_service.py`'s `list_sessions()` filters out any `session_id IS NULL` row, and the dialog's own "Leave blank to start a new one" hint wasn't implemented; blank really meant null. Fixed client-side to generate a session id when the field is blank.
+- **#79**: lite-mode `conflict_log` table had an older, different column shape than the `ConflictLog` ORM model (no `detected_at`/`conflict_metadata`/`notes`, different names for the rest) -- `GET /sync/conflicts/` 503'd, hit while exercising the Sync page. Same family as #73; fixed the same way.
+- **#80**: Every page showed a false "This server needs an API key" banner whenever a project simply wasn't connected to ZeroDB Cloud (a `cloud/status` 401 by design) -- even with `zerodb serve` started with **no** `ZERODB_LOCAL_API_KEY` at all and every real local-API request succeeding. The global 401/403 handler couldn't tell a cloud-auth 401 apart from a local-key 401. Fixed by excluding `cloud/status` from the generic auth-error path.
+
+**Verified working, no changes needed:**
+- Create a project; Overview/Projects both reflect it immediately.
+- Vectors: Guided and Advanced JSON upsert, both with a custom ID containing `/` (confirms the `{vector_id:path}` fix from a prior session still holds post-merge); semantic search with real relevance scores; delete (including a slash-ID vector).
+- Tables: column builder and JSON schema, both create working tables; Add row respects the schema's types.
+- Memory: add (now always listed, see #77), semantic search across stored memories.
+- Files: upload, download, delete; the 10 MB client-side guard (`exceedsUploadLimit` in `dashboard/lib/files.ts`) verified via its existing unit test rather than a live oversized browser upload (the upload tool itself caps combined size well under the limit, so a true 10MB+ upload wasn't practical to drive through the browser this pass).
+- Events: publish, family filter chips, detail panel.
+- Sync: preview (push, with real counts: tables/rows/vectors/memories/events/files) -- not executed (`Run sync`/push/pull need a real cloud connection, gated on `CLOUD_API_KEY`, not present this session; see below).
+- Theme (light/dark/system) and Settings form defaults (Guided ⇄ Advanced JSON) persist correctly across pages and reloads.
+- API key flow (step below): banner only appears when a real key is actually configured; pasting the correct key in Settings restores access; `zerodb serve --host 0.0.0.0` with no key prints the documented security warning to stdout.
+
+**Found, filed, not fixed (out of scope for this pass):**
+- **#83**: `docker compose up`/`docker compose build` fails outright -- `docker-compose.yml`'s `minio` service references `ainative-studio/minio:local`, which exists nowhere (not on Docker Hub, not built locally, no Dockerfile or build step for it). The comment pointing at a `minio-fork-maintenance-plan.md` doc is dead; that file doesn't exist. Independently confirmed `minio/minio:latest` really is gone from Docker Hub (so the stated reason for moving off it is real), but the replacement was never actually built. The dashboard's own Docker image builds and runs fine in isolation; it's the full compose stack that's blocked, since `zerodb-api` hard-depends on `minio: condition: service_healthy`. This is a real infrastructure gap (sourcing/building/maintaining a MinIO fork) out of scope to improvise inside this session -- filed and left for dedicated follow-up.
+- A deeper, separate lite-mode gap found but **not** fixed: `POST /sync/execute` still fails with `no such table: sync_plans` -- `api/models/sync_plan.py`'s ORM model (added for #71's sync-plan-persistence work) has no corresponding table in `lite/db/schema_lite.sql` at all (not just missing columns, the whole table). This blocks a real end-to-end push/pull run in lite mode even once cloud-connected. Flagged here rather than fixed, since it's materially larger than #73/#79's column-mismatch shape and wasn't part of this pass's original scope. No issue filed yet for this specific gap -- worth its own issue before anyone attempts a live cloud sync run in lite mode.
 
 ## Where things live
 
@@ -103,22 +127,28 @@ The design canvas was drawn before checking the request models. The code follows
 
 ## Verified
 
-- `npm test`: **144 passing** (16 files): pure logic, API client (now with an injected HTTP instance; the old suite made real requests to localhost:8000), theme provider, and page-level tests that drive each create flow through the UI.
+- `npm test`: **152 passing** (16 files): pure logic, API client (now with an injected HTTP instance; the old suite made real requests to localhost:8000), theme provider, and page-level tests that drive each create flow through the UI.
 - `npx tsc --noEmit`, `npm run lint`: clean.
-- `npm run build`: all 10 routes prerender.
+- `npm run build`: all 10 routes prerender (also rebuilt inside `docker compose build dashboard`, which succeeds cleanly -- see Docker note below).
 - Production build loaded in Chromium against fixture API data, every page in light, dark and 390px phone width (plus the 401 banner): **no console errors, no horizontal page scroll**. That pass caught and fixed a hydration mismatch (browser-only values rendered on the server) and table "Actions" labels escaping their scroll box on phones.
 - Also fixed two tests already failing on `main`: a timezone-dependent `formatDate` test and the network-calling API client suite.
+- **End-to-end against a real `zerodb serve` (lite mode) API**, driven by real browser automation, light and dark theme: see the session writeup above for exactly what was exercised and what it found. Python suite: `python -m pytest tests/ -v --no-cov` 261 passed / 9 skipped; `cd api && python -m pytest tests/ --no-cov` 69 passed / 120 skipped (the 120 need a real docker-compose Postgres, correctly skip without one).
+- `zerodb serve` is confirmed working end-to-end post-#75 (it crashed on every invocation before that fix).
+- API key flow (no key → open; `ZERODB_LOCAL_API_KEY` set → banner + per-page error until the key is pasted in Settings → Connection, after which it works; `--host 0.0.0.0` with no key prints the documented warning to stdout) -- all confirmed against a real server, not mocked.
+- Light/dark/system theme and Settings form defaults verified live, not just unit-tested.
+- Screenshots in `docs/design/dashboard-redesign/` for all 10 pages in light and dark are from this session's real lite-mode server with real data (replacing the prior fixture-data screenshots for those 20 files). The dialog (`dlg-*`), phone (`phone-*`), and `light-auth-banner.png` screenshots from the prior fixture-data pass were **not** retaken this session -- left as-is; worth a follow-up pass since the auth-banner one in particular now shows a state (#80's false positive) that no longer occurs the way it did when it was captured.
 
 ## Not verified / left to do locally
 
-1. **End-to-end against a real lite-mode API.** Not run here. Lite-mode CRUD for tables, vectors, files and events is blocked server-side by #47 (Postgres-only SQL). Once #47 lands: start the API in lite mode, `npm run dev`, and walk Projects → Vectors → Tables → Files → Events creating one of each.
-2. ~~**Vector IDs containing `/`.**~~ Fixed in 7895271 (`{vector_id:path}` in `api/routers/vectors.py`).
-3. ~~**Large uploads.**~~ Fixed in 3915a83: client-side 10 MB guard with a clear error (`MAX_UPLOAD_BYTES` in `dashboard/lib/files.ts`). The API itself still has no limit.
+1. ~~**End-to-end against a real lite-mode API.**~~ Done this session (see above). Found and fixed #73, #75, #77, #79, #80 along the way; found and filed #83 (Docker, not fixed) and a `sync_plans` lite-mode gap (not yet filed as its own issue -- see above).
+2. ~~**Vector IDs containing `/`.**~~ Fixed in 7895271 (`{vector_id:path}` in `api/routers/vectors.py`). Reconfirmed working this session, both Guided and Advanced JSON upsert and delete, after the `main` merge.
+3. ~~**Large uploads.**~~ Fixed in 3915a83: client-side 10 MB guard with a clear error (`MAX_UPLOAD_BYTES` in `dashboard/lib/files.ts`). The API itself still has no limit. Reconfirmed via its unit test this session (see above for why not a live oversized upload).
 4. **Live events.** The feed polls every 3s. `POST /events/subscribe` exists; switch to it if there's an SSE/WebSocket channel to read from.
-5. **Lite-mode sync tables.** `sync_state` table and `sync_history.sync_id` column are missing on a fresh lite DB (see above).
-6. **Sync against a real cloud account.** The Sync and Memory pages are built to the API's response models and tested with mocks; run a real push/pull once a project is connected.
-7. **Next.js 14.2.15 security advisories** (33 npm audit findings) remain. Framework bump is a separate, engineering-owned task.
-8. `next start` warns because `next.config.mjs` sets `output: 'standalone'`; for local runs use `node .next/standalone/server.js` (Dockerfile already does).
+5. ~~**Lite-mode sync tables.**~~ Fixed this session: #73 (`sync_history`) and #79 (`conflict_log`). A related, larger gap remains: `sync_plans` has no lite-mode table at all, blocking `POST /sync/execute` end to end (see above) -- not yet filed as its own issue.
+6. **Sync against a real cloud account.** Preview confirmed working this session (real counts from a real lite-mode project). Push/pull execution still not run against a real cloud account -- no `CLOUD_API_KEY` was available this session either. Also blocked in lite mode by the `sync_plans` gap above until that's fixed.
+7. **Docker / full mode.** Dashboard's own Docker image builds and runs cleanly (`docker compose build dashboard` succeeds, all 10 routes present in the build output). The full compose stack cannot start at all: see #83 -- `ainative-studio/minio:local` doesn't exist anywhere, and `zerodb-api` hard-depends on `minio` being healthy. Not fixed this session (real infra work, out of scope here). `ZERODB_BIND_ADDRESS=0.0.0.0` publishing on all interfaces instead of loopback could not be verified for the same reason -- the stack never came up.
+8. **Next.js 14.2.15 security advisories** (33 npm audit findings) remain. Framework bump is a separate, engineering-owned task.
+9. `next start` warns because `next.config.mjs` sets `output: 'standalone'`; for local runs use `node .next/standalone/server.js` (Dockerfile already does).
 
 ## Run it
 
