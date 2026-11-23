@@ -556,3 +556,230 @@ class TestServeStartsRealServer:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
+
+
+class TestWatchFlagWiring:
+    """Refs #105: --watch should route through watch_server() instead of
+    calling uvicorn directly, so the server auto-restarts on a crash."""
+
+    @patch("commands.serve.watch_server")
+    @patch("commands.serve._run_server")
+    def test_watch_flag_calls_watch_server(
+        self, mock_run_server, mock_watch_server, runner, serve_app, tmp_data_dir
+    ):
+        runner.invoke(serve_app, ["--data-dir", str(tmp_data_dir), "--watch"])
+        mock_watch_server.assert_called_once()
+        mock_run_server.assert_not_called()
+
+    @patch("commands.serve.watch_server")
+    @patch("commands.serve._run_server")
+    def test_no_watch_flag_calls_run_server_directly(
+        self, mock_run_server, mock_watch_server, runner, serve_app, tmp_data_dir
+    ):
+        runner.invoke(serve_app, ["--data-dir", str(tmp_data_dir)])
+        mock_run_server.assert_called_once()
+        mock_watch_server.assert_not_called()
+
+
+class TestWatchServerRestartLogic:
+    """Refs #105: unit-level coverage of watch_server's restart/backoff/
+    give-up decisions, using a fake multiprocessing.Process so these run
+    fast and don't need a real server. The real-crash-recovery behavior
+    is additionally proven end to end in TestWatchServerRealCrashRecovery
+    below, against the actual server process."""
+
+    def _fake_process_class(self, exitcodes):
+        """A stand-in for multiprocessing.Process whose .join() immediately
+        "completes" with each exitcode in turn (one instance per restart
+        attempt, matching watch_server's one-Process-per-loop-iteration
+        shape)."""
+        exitcodes_iter = iter(exitcodes)
+
+        class _FakeProcess:
+            def __init__(self, target=None, args=None, daemon=None):
+                self.exitcode = None
+
+            def start(self):
+                self.exitcode = next(exitcodes_iter)
+
+            def join(self, timeout=None):
+                pass
+
+            def is_alive(self):
+                return False
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                pass
+
+        return _FakeProcess
+
+    @patch("commands.serve.time.sleep")
+    @patch("commands.serve.multiprocessing.Process")
+    def test_clean_exit_does_not_restart(self, mock_process_cls, mock_sleep):
+        from commands.serve import watch_server
+
+        mock_process_cls.side_effect = self._fake_process_class([0])
+        watch_server("127.0.0.1", 8000, False)
+
+        assert mock_process_cls.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("commands.serve.time.sleep")
+    @patch("commands.serve.multiprocessing.Process")
+    def test_crash_then_clean_exit_restarts_once(self, mock_process_cls, mock_sleep):
+        from commands.serve import watch_server
+
+        mock_process_cls.side_effect = self._fake_process_class([1, 0])
+        watch_server("127.0.0.1", 8000, False)
+
+        assert mock_process_cls.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("commands.serve.time.sleep")
+    @patch("commands.serve.multiprocessing.Process")
+    def test_persistent_crash_loop_gives_up_instead_of_looping_forever(
+        self, mock_process_cls, mock_sleep
+    ):
+        import typer
+        from commands.serve import watch_server, _CRASH_LOOP_MAX_RESTARTS
+
+        # Always crash -- watch_server must eventually stop retrying
+        # rather than restart forever.
+        mock_process_cls.side_effect = self._fake_process_class(
+            [1] * (_CRASH_LOOP_MAX_RESTARTS + 5)
+        )
+
+        with pytest.raises(typer.Exit) as exc_info:
+            watch_server("127.0.0.1", 8000, False)
+
+        assert exc_info.value.exit_code == 1
+        # Gave up at or just past the configured threshold, not after
+        # exhausting every crash in the side_effect list.
+        assert mock_process_cls.call_count <= _CRASH_LOOP_MAX_RESTARTS + 1
+
+    @patch("commands.serve.time.sleep")
+    @patch("commands.serve.multiprocessing.Process")
+    def test_backoff_delay_increases_between_restarts(
+        self, mock_process_cls, mock_sleep
+    ):
+        from commands.serve import watch_server, _RESTART_BACKOFF_SECONDS
+
+        mock_process_cls.side_effect = self._fake_process_class([1, 1, 1, 0])
+        watch_server("127.0.0.1", 8000, False)
+
+        delays = [c.args[0] for c in mock_sleep.call_args_list]
+        assert delays == _RESTART_BACKOFF_SECONDS[:3]
+
+
+class TestWatchServerRealCrashRecovery:
+    """Refs #105: end-to-end proof that `zerodb serve --watch` actually
+    restarts after a real crash, not just that the mocked restart logic
+    is internally consistent. Mirrors TestServeStartsRealServer's use of
+    a real subprocess rather than in-process mocks, for the same reason:
+    a real crash caused by a real OS-level process kill is the only thing
+    that proves this end to end."""
+
+    def test_server_recovers_after_the_child_process_is_killed(self, tmp_path):
+        import shutil
+        import signal
+        import socket
+        import subprocess
+        import sys
+        import time
+
+        import httpx
+
+        def _pid_listening_on(port: int):
+            """Find the PID with a listening socket on `port`, via lsof --
+            avoids adding psutil as a dependency just for this one test."""
+            result = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+            )
+            pids = [int(p) for p in result.stdout.split()]
+            return pids[0] if pids else None
+
+        def _free_port() -> int:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                return s.getsockname()[1]
+
+        zerodb_bin = Path(sys.executable).parent / "zerodb"
+        if not zerodb_bin.exists():
+            zerodb_bin = shutil.which("zerodb")
+            if not zerodb_bin:
+                pytest.skip("zerodb console script not found on PATH")
+
+        port = _free_port()
+        data_dir = tmp_path / "zerodb_watch_data"
+        cli_dir = Path(__file__).parent.parent
+
+        env = dict(os.environ)
+        env.pop("DATABASE_URL", None)
+
+        supervisor = subprocess.Popen(
+            [
+                str(zerodb_bin), "serve",
+                "--port", str(port),
+                "--data-dir", str(data_dir),
+                "--watch",
+            ],
+            cwd=str(cli_dir.parent),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        try:
+            for _ in range(50):
+                if supervisor.poll() is not None:
+                    pytest.fail(
+                        f"supervisor exited early with code "
+                        f"{supervisor.returncode}:\n{supervisor.stdout.read()}"
+                    )
+                try:
+                    if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
+                        break
+                except httpx.ConnectError:
+                    time.sleep(0.2)
+            else:
+                pytest.fail("server did not start in time")
+
+            # Hard-kill whichever process is actually listening on the
+            # port -- the uvicorn child, not the supervisor -- the same
+            # way an OOM kill or an unhandled crash would take down only
+            # the server. lsof avoids adding psutil as a dependency just
+            # for this one test.
+            child_pid = _pid_listening_on(port)
+            assert child_pid is not None, "expected a process listening on the port"
+            assert child_pid != supervisor.pid, (
+                "expected --watch to run the server in a child process, "
+                "not the supervisor itself"
+            )
+            os.kill(child_pid, signal.SIGKILL)
+
+            for _ in range(50):
+                try:
+                    if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
+                        return
+                except httpx.TransportError:
+                    # Polling across the kill -> restart transition: the
+                    # old socket can refuse (ConnectError), reset mid-read
+                    # if the kill lands between accept and response
+                    # (ReadError), or momentarily accept-then-drop while
+                    # the new child is still starting up -- all expected,
+                    # not just a plain connection refusal.
+                    time.sleep(0.2)
+            pytest.fail("server did not come back up after the child was killed")
+        finally:
+            supervisor.terminate()
+            try:
+                supervisor.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                supervisor.kill()
+                supervisor.wait(timeout=5)
