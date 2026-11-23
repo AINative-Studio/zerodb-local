@@ -20,6 +20,8 @@ import {
 } from '@/lib/preferences'
 import { formatRelativeTime } from '@/lib/utils'
 import { useMounted } from '@/lib/use-mounted'
+import { getApiKey, setApiKey } from '@/lib/api-key'
+import { useAuthRequired } from '@/components/providers/query-provider'
 import type { ThemePreference } from '@/lib/theme'
 
 export default function SettingsPage() {
@@ -86,6 +88,8 @@ export default function SettingsPage() {
           </dl>
         </Section>
 
+        <Connection />
+
         <Section title="Defaults for new data" description="Pre-fill the create forms. You can still change them each time. Saved in this browser.">
           <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3.5">
             <Field label="Open create forms in" htmlFor="pref-mode">
@@ -117,6 +121,59 @@ export default function SettingsPage() {
         <CloudSync />
       </div>
     </PageShell>
+  )
+}
+
+function Connection() {
+  const { required, clear } = useAuthRequired()
+  const [key, setKey] = React.useState('')
+  const [saved, setSaved] = React.useState(false)
+
+  React.useEffect(() => {
+    setSaved(!!getApiKey())
+  }, [])
+
+  return (
+    <Section
+      id="connection"
+      title="Connection"
+      description="Lite mode (zerodb serve) needs no sign-in. Full mode (Docker) defaults to cloud sign-in: paste your ZeroDB API key here and the dashboard sends it with every request. It stays in this browser."
+    >
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">API key</span>
+        {saved ? <Badge variant="success">Saved in this browser</Badge> : <Badge variant="muted">None</Badge>}
+        {required && <Badge variant="warning">Server is asking for one</Badge>}
+      </div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!key.trim()) return
+          setApiKey(key)
+          setKey('')
+          setSaved(true)
+          clear()
+        }}
+        className="flex flex-wrap items-end gap-2.5"
+      >
+        <Field label={saved ? 'Replace API key' : 'ZeroDB API key'} htmlFor="api-key" className="min-w-[260px] flex-1">
+          <Input id="api-key" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} className="font-mono" />
+        </Field>
+        <Button type="submit" variant="outline" disabled={!key.trim()}>Save key</Button>
+        {saved && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setApiKey(null)
+              setSaved(false)
+              clear()
+            }}
+          >
+            Remove
+          </Button>
+        )}
+      </form>
+    </Section>
   )
 }
 
@@ -188,10 +245,10 @@ function CloudSync() {
   )
 }
 
-function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+function Section({ id: anchor, title, description, children }: { id?: string; title: string; description?: string; children: React.ReactNode }) {
   const id = `s-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-3.5 rounded-xl border bg-card px-6 py-5">
+    <section id={anchor} aria-labelledby={id} className="flex flex-col gap-3.5 rounded-xl border bg-card px-6 py-5">
       <div className="flex flex-col gap-0.5">
         <h2 id={id} className="font-display text-[17px] font-semibold">{title}</h2>
         {description && <p className="text-[13px] text-muted-foreground">{description}</p>}

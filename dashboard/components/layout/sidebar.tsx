@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   Activity,
+  Brain,
+  RefreshCw,
   FileText,
   FolderKanban,
   LayoutDashboard,
@@ -21,8 +23,10 @@ export const navigation = [
   { name: 'Projects', href: '/projects', icon: FolderKanban },
   { name: 'Vectors', href: '/vectors', icon: Waypoints },
   { name: 'Tables', href: '/tables', icon: Table2 },
+  { name: 'Memory', href: '/memory', icon: Brain },
   { name: 'Files', href: '/files', icon: FileText },
   { name: 'Events', href: '/events', icon: Zap },
+  { name: 'Sync', href: '/sync', icon: RefreshCw },
   { name: 'Logs', href: '/logs', icon: Activity },
   { name: 'Settings', href: '/settings', icon: SlidersHorizontal },
 ] as const

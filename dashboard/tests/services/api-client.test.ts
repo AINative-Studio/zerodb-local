@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createApiClient, type HttpLike } from '@/services/api-client'
+import { createApiClient, withApiKey, ApiRequestError, type HttpLike } from '@/services/api-client'
 
 // The client takes its HTTP instance as a parameter, so tests never open a
 // socket (the old suite re-mocked axios.create after the singleton had
@@ -120,5 +120,95 @@ describe('ApiClient', () => {
   it('gets event stats', async () => {
     await createApiClient(http).getEventStats(P, 'day')
     expect(http.get).toHaveBeenCalledWith(`${base}/events/stats/summary`, { params: { time_range: 'day' } })
+  })
+
+  // Memory -- routes from api/routers/memory.py
+  it('lists memory sessions', async () => {
+    await createApiClient(http).listMemorySessions(P, { agentId: 'support' })
+    expect(http.get).toHaveBeenCalledWith(`${base}/memory/sessions`, { params: { agent_id: 'support', limit: 100 } })
+  })
+
+  it('loads a session context window', async () => {
+    await createApiClient(http).getMemoryContext(P, 's/1')
+    expect(http.get).toHaveBeenCalledWith(`${base}/memory/context/s%2F1`, { params: { limit: 200 } })
+  })
+
+  it('stores a memory', async () => {
+    const body = { content: 'hi', role: 'user' as const, agent_id: 'support', session_id: 's1', metadata: {} }
+    await createApiClient(http).storeMemory(P, body)
+    expect(http.post).toHaveBeenCalledWith(`${base}/memory/store`, body)
+  })
+
+  it('searches memory with threshold 0 by default', async () => {
+    await createApiClient(http).searchMemory(P, { query: 'pricing', sessionId: 's1' })
+    expect(http.post).toHaveBeenCalledWith(`${base}/memory/search`, {
+      query: 'pricing',
+      limit: 20,
+      threshold: 0,
+      session_id: 's1',
+    })
+  })
+
+  it('deletes a session', async () => {
+    await createApiClient(http).deleteMemorySession(P, 's1')
+    expect(http.delete).toHaveBeenCalledWith(`${base}/memory/sessions/s1`)
+  })
+
+  // Sync -- routes from api/routers/sync_orchestrator.py, conflict_resolution.py, sync_history.py
+  it('gets sync status', async () => {
+    await createApiClient(http).getSyncStatus(P)
+    expect(http.get).toHaveBeenCalledWith(`/v1/projects/${P}/sync/status`)
+  })
+
+  it('plans a sync', async () => {
+    await createApiClient(http).planSync(P, { direction: 'push', conflict_strategy: 'newest_wins' })
+    expect(http.post).toHaveBeenCalledWith(`/v1/projects/${P}/sync/plan`, {
+      direction: 'push',
+      conflict_strategy: 'newest_wins',
+    })
+  })
+
+  it('executes an approved plan', async () => {
+    await createApiClient(http).executeSync(P, 'plan-1')
+    expect(http.post).toHaveBeenCalledWith(`/v1/projects/${P}/sync/execute`, { plan_id: 'plan-1', approved: true })
+  })
+
+  it('lists and resolves conflicts', async () => {
+    const c = createApiClient(http)
+    await c.listConflicts(P)
+    expect(http.get).toHaveBeenCalledWith(`/v1/projects/${P}/sync/conflicts/`, { params: { limit: 100 } })
+    await c.resolveConflict(P, 'c1', 'local_wins')
+    expect(http.post).toHaveBeenCalledWith(`/v1/projects/${P}/sync/conflicts/c1/resolve`, {
+      conflict_id: 'c1',
+      strategy: 'local_wins',
+    })
+  })
+
+  it('lists sync history', async () => {
+    await createApiClient(http).listSyncHistory(P)
+    expect(http.get).toHaveBeenCalledWith(`/v1/projects/${P}/sync/history`, { params: { limit: 20, offset: 0 } })
+  })
+})
+
+describe('withApiKey', () => {
+  it('adds a bearer header when a key is set', () => {
+    expect(withApiKey({ headers: {} }, 'sk_123').headers).toEqual({ Authorization: 'Bearer sk_123' })
+  })
+
+  it('leaves the request alone without a key', () => {
+    expect(withApiKey({ headers: { a: '1' } }, null).headers).toEqual({ a: '1' })
+  })
+
+  it('never overrides an explicit Authorization header', () => {
+    expect(withApiKey({ headers: { Authorization: 'Bearer other' } }, 'sk_123').headers).toEqual({ Authorization: 'Bearer other' })
+  })
+})
+
+describe('ApiRequestError', () => {
+  it('keeps the HTTP status so the UI can spot 401s', () => {
+    const e = new ApiRequestError('nope', 401)
+    expect(e).toBeInstanceOf(Error)
+    expect(e.status).toBe(401)
+    expect(e.isAuthError).toBe(true)
   })
 })

@@ -7,6 +7,7 @@ import { QueryProvider } from '@/components/providers/query-provider'
 import { ThemeProvider } from '@/components/providers/theme-provider'
 import { ProjectProvider } from '@/components/providers/project-provider'
 import { Sidebar } from '@/components/layout/sidebar'
+import { AuthNotice } from '@/components/layout/auth-notice'
 import { themeInitScript } from '@/lib/theme'
 
 export const metadata: Metadata = {
@@ -27,7 +28,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <ProjectProvider>
               <div className="flex min-h-screen flex-col md:flex-row">
                 <Sidebar />
-                <main className="min-w-0 flex-1">{children}</main>
+                <main className="min-w-0 flex-1">
+                  <AuthNotice />
+                  {children}
+                </main>
               </div>
             </ProjectProvider>
           </QueryProvider>

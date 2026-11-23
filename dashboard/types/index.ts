@@ -54,14 +54,37 @@ export interface VectorSearchResult {
   namespace: string
 }
 
-export interface Memory {
+// Agent memory -- api/routers/memory.py
+export type MemoryRole = 'user' | 'assistant' | 'system'
+
+export interface MemoryRecord {
   id: string
-  project_id: string
-  session_id: string
-  role: string
+  session_id: string | null
+  agent_id: string
+  role: MemoryRole
   content: string
-  metadata?: Record<string, any>
-  created_at: string
+  metadata: Record<string, any>
+  created_at?: string | null
+}
+
+export interface MemorySearchResult extends MemoryRecord {
+  score: number
+}
+
+export interface MemorySession {
+  session_id: string
+  agent_id: string
+  message_count: number
+  first_message_at?: string | null
+  last_message_at?: string | null
+}
+
+export interface MemoryContext {
+  session_id: string
+  messages: MemoryRecord[]
+  message_count: number
+  estimated_tokens: number
+  truncated: boolean
 }
 
 export interface Table {
@@ -219,4 +242,107 @@ export interface LogsResponse {
   level?: string
   time_range_start: string
   time_range_end: string
+}
+
+// Sync -- api/schemas/sync_orchestrator.py, conflict_resolution, sync_history
+export type SyncDirection = 'push' | 'pull' | 'bidirectional'
+export type ConflictStrategy = 'local_wins' | 'cloud_wins' | 'newest_wins' | 'manual'
+export type SyncRunStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'rolled_back'
+
+export interface SyncStatusInfo {
+  project_id: string
+  last_sync_at?: string | null
+  last_sync_direction?: SyncDirection | null
+  sync_in_progress: boolean
+  current_sync_id?: string | null
+  pending_changes_count: number
+  entity_sync_states: Record<string, Record<string, any>>
+}
+
+export interface SyncPlanStep {
+  step_number: number
+  step_type: string
+  entity_type?: string | null
+  operation?: string | null
+  data_count: number
+  estimated_duration_seconds?: number | null
+  description: string
+}
+
+export interface SyncEntityCount {
+  tables: number
+  table_rows: number
+  vectors: number
+  memory: number
+  events: number
+  files: number
+}
+
+export interface SyncPlanResult {
+  plan_id: string
+  project_id: string
+  direction: SyncDirection
+  created_at: string
+  steps: SyncPlanStep[]
+  entity_counts: SyncEntityCount
+  estimated_duration_seconds: number
+  estimated_data_size_bytes: number
+  schema_changes: { has_changes: boolean; is_breaking: boolean; changes: string[]; migration_required: boolean }
+  conflicts: { has_conflicts: boolean; conflict_count: number; conflicts: Array<Record<string, any>>; resolution_strategy?: ConflictStrategy | null }
+  warnings: Array<{ severity: string; message: string; category: string }>
+  requires_approval: boolean
+  can_rollback: boolean
+}
+
+export interface SyncRunResult {
+  sync_id: string
+  plan_id: string
+  direction: SyncDirection
+  status: SyncRunStatus
+  started_at: string
+  completed_at?: string | null
+  duration_seconds?: number | null
+  total_steps: number
+  successful_steps: number
+  failed_steps: number
+  records_synced: number
+  bytes_transferred: number
+  errors: string[]
+}
+
+export interface SyncConflict {
+  id: string
+  project_id: string
+  entity_type: string
+  entity_id: string
+  local_version: any
+  cloud_version: any
+  resolution_strategy?: string | null
+  chosen_version?: string | null
+  detected_at?: string | null
+  resolved_at?: string | null
+  conflict_metadata?: Record<string, any> | null
+  notes?: string | null
+}
+
+export interface SyncHistoryEntry {
+  id: string
+  sync_id: string
+  direction: SyncDirection
+  mode?: string
+  status: SyncRunStatus
+  started_at: string
+  completed_at?: string | null
+  duration_seconds?: number | null
+  records_synced: Record<string, number>
+  bytes_transferred: number
+  error_message?: string | null
+}
+
+export interface SyncHistoryPage {
+  items: SyncHistoryEntry[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
 }

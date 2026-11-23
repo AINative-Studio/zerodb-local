@@ -4,7 +4,18 @@ import type {
   ProjectStats,
   Vector,
   VectorSearchResult,
-  Memory,
+  MemoryRecord,
+  MemorySearchResult,
+  MemorySession,
+  MemoryContext,
+  MemoryRole,
+  SyncStatusInfo,
+  SyncPlanResult,
+  SyncRunResult,
+  SyncConflict,
+  SyncHistoryPage,
+  SyncDirection,
+  ConflictStrategy,
   Table,
   TableRow,
   StoredFile,
@@ -22,6 +33,28 @@ import type {
 } from '@/types'
 import type { UpsertVectorRequest } from '@/lib/vector-form'
 import type { TableSchema } from '@/lib/schema-builder'
+import { getApiKey } from '@/lib/api-key'
+
+/** An API failure that keeps the HTTP status (401 -> show the sign-in hint). */
+export class ApiRequestError extends Error {
+  status?: number
+  constructor(message: string, status?: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+  }
+  get isAuthError(): boolean {
+    return this.status === 401 || this.status === 403
+  }
+}
+
+/** Adds `Authorization: Bearer <key>` unless the request already has one. */
+export function withApiKey<T extends { headers?: any }>(config: T, key: string | null): T {
+  if (!key) return config
+  const headers = { ...(config.headers ?? {}) }
+  if (!headers.Authorization && !headers.authorization) headers.Authorization = `Bearer ${key}`
+  return { ...config, headers }
+}
 
 /** The subset of an axios instance the client uses -- injectable for tests. */
 export interface HttpLike {
@@ -45,16 +78,24 @@ function createHttp(): HttpLike {
     timeout: 30000,
     headers: { 'Content-Type': 'application/json' },
   })
+  instance.interceptors.request.use((config) => withApiKey(config, getApiKey()))
   instance.interceptors.response.use(
     (response) => response,
     (error: AxiosError<ApiError>) => {
       if (error.response) {
-        const detail = error.response.data?.detail
-        throw new Error(typeof detail === 'string' ? detail : 'API request failed')
+        const { status, data } = error.response
+        const detail = data?.detail
+        if (status === 401 || status === 403) {
+          throw new ApiRequestError(
+            'This server needs an API key. Add one in Settings › Connection.',
+            status
+          )
+        }
+        throw new ApiRequestError(typeof detail === 'string' ? detail : `API request failed (${status})`, status)
       } else if (error.request) {
-        throw new Error('No response from the ZeroDB Local API. Is it running?')
+        throw new ApiRequestError('No response from the ZeroDB Local API. Is it running?')
       } else {
-        throw new Error(error.message || 'Request setup failed')
+        throw new ApiRequestError(error.message || 'Request setup failed')
       }
     }
   )
@@ -122,9 +163,61 @@ export function createApiClient(http: HttpLike = createHttp()) {
       await http.delete(`${db(projectId)}/vectors/${enc(vectorId)}`)
     },
 
-    // Memory
-    async listMemory(projectId: string, sessionId?: string): Promise<Memory[]> {
-      return (await http.get<Memory[]>(`${db(projectId)}/memory`, { params: { session_id: sessionId } })).data
+    // Memory (api/routers/memory.py)
+    async listMemorySessions(projectId: string, opts: { agentId?: string; limit?: number } = {}): Promise<MemorySession[]> {
+      const params: Record<string, any> = {}
+      if (opts.agentId) params.agent_id = opts.agentId
+      params.limit = opts.limit ?? 100
+      return (await http.get<MemorySession[]>(`${db(projectId)}/memory/sessions`, { params })).data
+    },
+    async getMemoryContext(projectId: string, sessionId: string, limit = 200): Promise<MemoryContext> {
+      return (await http.get<MemoryContext>(`${db(projectId)}/memory/context/${enc(sessionId)}`, { params: { limit } })).data
+    },
+    async storeMemory(
+      projectId: string,
+      body: { content: string; role: MemoryRole; agent_id?: string; session_id?: string; metadata?: Record<string, any> }
+    ): Promise<MemoryRecord> {
+      return (await http.post<MemoryRecord>(`${db(projectId)}/memory/store`, body)).data
+    },
+    async searchMemory(
+      projectId: string,
+      opts: { query: string; limit?: number; threshold?: number; agentId?: string; sessionId?: string; role?: MemoryRole }
+    ): Promise<MemorySearchResult[]> {
+      const body: Record<string, any> = { query: opts.query, limit: opts.limit ?? 20, threshold: opts.threshold ?? 0 }
+      if (opts.agentId) body.agent_id = opts.agentId
+      if (opts.sessionId) body.session_id = opts.sessionId
+      if (opts.role) body.role = opts.role
+      return (await http.post<MemorySearchResult[]>(`${db(projectId)}/memory/search`, body)).data
+    },
+    async deleteMemorySession(projectId: string, sessionId: string): Promise<void> {
+      await http.delete(`${db(projectId)}/memory/sessions/${enc(sessionId)}`)
+    },
+
+    // Sync (api/routers/sync_orchestrator.py, conflict_resolution.py, sync_history.py)
+    async getSyncStatus(projectId: string): Promise<SyncStatusInfo> {
+      return (await http.get<SyncStatusInfo>(`/v1/projects/${projectId}/sync/status`)).data
+    },
+    async planSync(
+      projectId: string,
+      body: { direction: SyncDirection; conflict_strategy?: ConflictStrategy; entity_types?: string[]; include_schema?: boolean }
+    ): Promise<SyncPlanResult> {
+      return (await http.post<SyncPlanResult>(`/v1/projects/${projectId}/sync/plan`, body)).data
+    },
+    async executeSync(projectId: string, planId: string): Promise<SyncRunResult> {
+      // The dashboard only executes after the person has reviewed the plan
+      // and pressed the run button, so that click is the approval.
+      return (await http.post<SyncRunResult>(`/v1/projects/${projectId}/sync/execute`, { plan_id: planId, approved: true })).data
+    },
+    async listConflicts(projectId: string, limit = 100): Promise<SyncConflict[]> {
+      return (await http.get<SyncConflict[]>(`/v1/projects/${projectId}/sync/conflicts/`, { params: { limit } })).data
+    },
+    async resolveConflict(projectId: string, conflictId: string, strategy: ConflictStrategy, manualChoice?: 'local' | 'cloud') {
+      const body: Record<string, any> = { conflict_id: conflictId, strategy }
+      if (manualChoice) body.manual_choice = manualChoice
+      return (await http.post(`/v1/projects/${projectId}/sync/conflicts/${enc(conflictId)}/resolve`, body)).data
+    },
+    async listSyncHistory(projectId: string, limit = 20, offset = 0): Promise<SyncHistoryPage> {
+      return (await http.get<SyncHistoryPage>(`/v1/projects/${projectId}/sync/history`, { params: { limit, offset } })).data
     },
 
     // Tables

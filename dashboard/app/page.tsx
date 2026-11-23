@@ -117,6 +117,7 @@ export default function OverviewPage() {
         <Stat href="/projects" label="Projects" value={projects.length} />
         <Stat href="/vectors" label="Vectors" value={totals.vectors} />
         <Stat href="/tables" label="Tables" value={totals.tables} />
+        <Stat href="/memory" label="Memories" value={totals.memory} />
         <Stat href="/files" label="Files" value={totals.files} />
         <Stat href="/events" label="Events" value={totals.events} />
       </section>
