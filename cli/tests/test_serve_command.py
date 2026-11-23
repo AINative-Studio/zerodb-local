@@ -476,6 +476,66 @@ class TestExposureWarning:
         assert exposure_warning("0.0.0.0", key_set=True) is None
 
 
+class TestVolatileDataDirWarning:
+    """Refs #109: the real default (~/.zerodb/data) is durable and already
+    works correctly -- confirmed directly against a real running server
+    that it survives restarts. This only needs to warn when --data-dir
+    has been pointed somewhere that looks temporary instead, so a user
+    isn't surprised their data didn't survive a reboot or routine OS/shell
+    cleanup without ever being told their --data-dir choice was why."""
+
+    def test_warns_for_a_path_under_the_real_system_temp_dir(self, tmp_path):
+        from commands.serve import volatile_data_dir_warning
+
+        # tmp_path (pytest's own fixture) is itself rooted under
+        # tempfile.gettempdir() -- the real thing this check is meant to
+        # catch, not a hardcoded guess at what "temporary" looks like.
+        msg = volatile_data_dir_warning(tmp_path / "zerodb-data")
+        assert msg is not None
+        assert "temporary" in msg
+
+    def test_warns_for_literal_tmp_regardless_of_tempfile_gettempdir(self):
+        from commands.serve import volatile_data_dir_warning
+
+        # /tmp is conventionally temporary even on a platform where
+        # tempfile.gettempdir() resolves somewhere else (e.g. macOS's
+        # actual $TMPDIR is a per-session path under /var/folders/...,
+        # not literal /tmp) -- this must not depend on /tmp being the
+        # exact value tempfile.gettempdir() happened to return.
+        assert volatile_data_dir_warning(Path("/tmp/some-zerodb-data")) is not None
+        assert volatile_data_dir_warning(Path("/private/tmp/some-zerodb-data")) is not None
+        assert volatile_data_dir_warning(Path("/var/tmp/some-zerodb-data")) is not None
+
+    def test_warns_for_any_var_folders_path_not_just_the_current_tmpdir(self):
+        from commands.serve import volatile_data_dir_warning
+
+        # A /var/folders/... path other than this process's own current
+        # $TMPDIR (e.g. one copied from an old session, or another
+        # process's) is still conventionally temporary on macOS.
+        msg = volatile_data_dir_warning(
+            Path("/var/folders/zz/completely-made-up-hash/T/zerodb-data")
+        )
+        assert msg is not None
+
+    def test_no_warning_for_the_real_default(self):
+        from commands.serve import volatile_data_dir_warning, DEFAULT_DATA_DIR
+
+        assert volatile_data_dir_warning(DEFAULT_DATA_DIR) is None
+
+    def test_no_warning_for_an_arbitrary_non_temp_path(self):
+        from commands.serve import volatile_data_dir_warning
+
+        assert volatile_data_dir_warning(Path.home() / "my-zerodb-data") is None
+
+    def test_no_warning_for_a_path_that_merely_contains_tmp_as_a_substring(self):
+        from commands.serve import volatile_data_dir_warning
+
+        # A directory literally named "tmp-backups" (substring match on
+        # "tmp") is not the same as a path actually rooted under /tmp --
+        # the check must compare whole path components, not substrings.
+        assert volatile_data_dir_warning(Path.home() / "tmp-backups" / "zerodb") is None
+
+
 # ===== Real server startup (no mocks) =====
 
 class TestServeStartsRealServer:

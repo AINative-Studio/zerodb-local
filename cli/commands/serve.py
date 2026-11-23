@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -44,6 +45,48 @@ def exposure_warning(host: str, key_set: bool) -> Optional[str]:
         "your data. Set ZERODB_LOCAL_API_KEY to require a key, or use --host 127.0.0.1."
     )
 EMBEDDING_MODEL_MARKER = ".embedding_model_ready"
+
+
+def volatile_data_dir_warning(data_dir: Path) -> Optional[str]:
+    """
+    Warning text when --data-dir resolves under an OS temp location.
+
+    The real default (~/.zerodb/data) is durable and already works
+    correctly. This only fires when --data-dir has been pointed somewhere
+    that looks temporary, so a user doesn't lose data to routine OS/shell
+    cleanup without ever being told their data directory choice was the
+    reason -- advisory only, like exposure_warning above; never blocks
+    startup.
+    """
+    resolved_path = Path(data_dir).resolve()
+    resolved = str(resolved_path)
+    temp_root = str(Path(tempfile.gettempdir()).resolve())
+
+    under_temp_root = resolved == temp_root or resolved.startswith(temp_root + os.sep)
+    # tempfile.gettempdir() returns one specific temp root (e.g. macOS's
+    # per-session $TMPDIR under /var/folders/<hash>/...), but /tmp,
+    # /var/tmp, and ANY /var/folders/... path (not just the one that
+    # happens to be this process's own $TMPDIR) are also conventionally
+    # temporary -- Path.parts splits directories individually, so
+    # "var_folders" never appears as a single part; check for adjacent
+    # "var", "folders" parts instead, and bare "tmp"/"var_tmp" elsewhere.
+    parts = resolved_path.parts
+    under_known_temp_name = any(
+        part in ("tmp", "var_tmp") for part in parts
+    ) or any(
+        parts[i] == "var" and parts[i + 1] == "folders"
+        for i in range(len(parts) - 1)
+    )
+
+    if not (under_temp_root or under_known_temp_name):
+        return None
+
+    return (
+        f"{resolved} looks like a temporary directory and may not survive a "
+        "reboot or routine cleanup. Your data won't be safe here long-term -- "
+        f"consider --data-dir {DEFAULT_DATA_DIR} (the default) or another "
+        "durable location."
+    )
 
 
 def ensure_data_dir(data_dir: Path) -> None:
@@ -311,6 +354,9 @@ def serve(
     warning = exposure_warning(host, key_set=bool(os.getenv("ZERODB_LOCAL_API_KEY", "").strip()))
     if warning:
         console.print(f"[yellow]Warning:[/yellow] {warning}")
+    data_dir_warning = volatile_data_dir_warning(data_dir)
+    if data_dir_warning:
+        console.print(f"[yellow]Warning:[/yellow] {data_dir_warning}")
 
     if watch:
         watch_server(host, port, reload)
