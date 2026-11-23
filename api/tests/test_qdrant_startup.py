@@ -46,8 +46,10 @@ class TestQdrantDockerCompose:
         # Check image
         assert qdrant['image'] == 'qdrant/qdrant:latest'
 
-        # Check ports: container ports fixed, host port configurable, and
-        # published on loopback by default (this machine only)
+        # Check ports: container ports fixed, host port configurable via
+        # ZERODB_QDRANT_REST_PORT/ZERODB_QDRANT_GRPC_PORT env vars (default
+        # 6333/6334, Refs #50), and published on loopback by default (this
+        # machine only, Refs #67).
         ports = qdrant['ports']
         assert any(p.endswith(':6333') for p in ports)  # REST API
         assert any(p.endswith(':6334') for p in ports)  # gRPC API

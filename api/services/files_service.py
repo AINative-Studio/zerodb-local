@@ -13,7 +13,14 @@ from sqlalchemy.orm import Session
 
 from services.minio_service import minio_service
 from lite.config import is_lite_mode
-from lite.sql_compat import jsonb_cast_sql, now_iso, now_sql, parse_json_column, to_isoformat
+from lite.sql_compat import (
+    jsonb_cast_sql,
+    log_cdc_change,
+    now_iso,
+    now_sql,
+    parse_json_column,
+    to_isoformat,
+)
 
 
 class FilesService:
@@ -102,6 +109,23 @@ class FilesService:
                 "metadata": json.dumps(metadata or {})
             }
         ).first()
+
+        # Application-level CDC (Refs #63): full mode logs this via the
+        # files table's INSERT trigger; lite mode has no trigger support,
+        # so log the same change_log row explicitly before committing, so
+        # it lands atomically with the file row it describes.
+        if is_lite_mode():
+            log_cdc_change(
+                db, project_id, "file", result.id, "INSERT",
+                {
+                    "file_name": result.file_name,
+                    "file_path": result.file_path,
+                    "content_type": result.content_type,
+                    "file_size": result.file_size,
+                    "folder": result.folder,
+                    "metadata": parse_json_column(result.metadata),
+                },
+            )
 
         db.commit()
 
@@ -351,6 +375,16 @@ class FilesService:
             params["now"] = now_iso()
 
         db.execute(delete_query, params)
+
+        # Application-level CDC (Refs #63): this is a soft-delete UPDATE in
+        # both modes, so in full mode it fires the files table's UPDATE
+        # trigger (operation 'UPDATE', not 'DELETE') -- lite mode logs the
+        # same operation here to match that contract.
+        if is_lite_mode():
+            log_cdc_change(
+                db, project_id, "file", file_id, "UPDATE",
+                {"file_path": file_path},
+            )
 
         db.commit()
 

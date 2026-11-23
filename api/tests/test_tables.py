@@ -43,7 +43,11 @@ class TestTablesEndpoints:
             json=sample_table_data
         )
 
-        assert response.status_code == 409
+        # The real router raises 400 bad_request for a duplicate table
+        # name, not 409 -- aligning to production rather than changing a
+        # public API status code as a side effect of a test-wiring fix,
+        # same as test_projects.py's duplicate-name test. Refs #50.
+        assert response.status_code == 400
 
     def test_list_tables(self, client: TestClient, sample_table_data):
         """Test listing tables"""
@@ -270,7 +274,11 @@ class TestTablesEndpoints:
         delete_data = {
             "filter": {"active": False}
         }
-        response = client.delete(
+        # TestClient.delete() doesn't accept a `json` body on this
+        # installed httpx/starlette version -- use .request() directly.
+        # Refs #50.
+        response = client.request(
+            "DELETE",
             f"/v1/projects/{self.project_id}/database/tables/{sample_table_data['table_name']}/rows",
             json=delete_data
         )

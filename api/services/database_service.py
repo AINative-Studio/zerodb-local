@@ -23,9 +23,22 @@ class DatabaseService:
     """
     Service for PostgreSQL database operations
     Uses pgvector extension for vector storage backup
+
+    Engine/session construction is deferred until first actually needed
+    (`engine`/`SessionLocal` properties, or `get_db()`) rather than done in
+    `__init__`. `create_engine()` eagerly imports the psycopg2 DBAPI module
+    as soon as it's called, so building it in `__init__` means merely
+    *instantiating* this class (which happens at `services.database_service`
+    *import* time, for the module-level `database_service` singleton)
+    requires psycopg2-binary to be installed -- even in processes that never
+    touch full mode's Postgres. Refs #50.
     """
 
     def __init__(self):
+        self._engine = None
+        self._session_local = None
+
+    def _build_engine(self):
         database_url = os.getenv(
             "DATABASE_URL",
             "postgresql://zerodb:localpass@postgres:5432/zerodb_local"
@@ -53,12 +66,23 @@ class DatabaseService:
         if "railway" in database_url.lower() or "proxy.rlwy.net" in database_url:
             engine_kwargs["pool_reset_on_return"] = "commit"
 
-        self.engine = create_engine(database_url, **engine_kwargs)
-        self.SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=self.engine
-        )
+        return create_engine(database_url, **engine_kwargs)
+
+    @property
+    def engine(self):
+        if self._engine is None:
+            self._engine = self._build_engine()
+        return self._engine
+
+    @property
+    def SessionLocal(self) -> sessionmaker:
+        if self._session_local is None:
+            self._session_local = sessionmaker(
+                autocommit=False,
+                autoflush=False,
+                bind=self.engine
+            )
+        return self._session_local
 
     def get_db(self):
         """

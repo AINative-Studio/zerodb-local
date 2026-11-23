@@ -8,6 +8,7 @@ Run with: pytest tests/test_docker_build.py -v --confcutdir=.
 Refs #1128
 """
 import pytest
+import re
 import subprocess
 import os
 import json
@@ -41,6 +42,19 @@ def api_dir_path():
     current_dir = Path(__file__).parent
     api_dir = current_dir.parent
     return api_dir
+
+
+@pytest.fixture(scope="module")
+def repo_root_path():
+    """
+    Get path to the repo root -- the Dockerfile's actual build context.
+
+    api/Dockerfile's own comment says "build context is repo root" (it
+    COPYs both api/ and the sibling lite/ into the image), so `docker
+    build` must be invoked with the repo root as cwd, not api/ -- running
+    it from api/ can't find ../lite/. Refs #50.
+    """
+    return Path(__file__).parent.parent.parent
 
 
 @pytest.mark.docker
@@ -149,23 +163,24 @@ class TestDockerBuild:
 
     @pytest.mark.slow
     @pytest.mark.requires_docker
-    def test_docker_image_builds_successfully(self, docker_image_name, api_dir_path):
+    def test_docker_image_builds_successfully(self, docker_image_name, repo_root_path):
         """
         GIVEN: Valid Dockerfile and application code
         WHEN: Building Docker image
         THEN: Build should complete without errors
         """
-        # Build Docker image
+        # Build Docker image. Context must be the repo root, not api/ --
+        # api/Dockerfile COPYs the sibling lite/ directory too. Refs #50.
         build_cmd = [
             "docker", "build",
             "-t", docker_image_name,
-            "-f", "Dockerfile",
+            "-f", "api/Dockerfile",
             "."
         ]
 
         result = subprocess.run(
             build_cmd,
-            cwd=api_dir_path,
+            cwd=repo_root_path,
             capture_output=True,
             text=True,
             timeout=300  # 5 minutes timeout
@@ -356,11 +371,28 @@ class TestDockerBuild:
         if "unknown command" in result.stderr.lower() or result.returncode == 125:
             pytest.skip("docker scout not available")
 
-        # If scout is available, check output for critical issues
-        # Don't fail on warnings, only on critical vulnerabilities
+        # If scout is available, check output for critical issues.
+        # Don't fail on warnings, only on critical vulnerabilities.
+        #
+        # The previous assertion (`"CRITICAL" not in stdout.upper() or
+        # stdout.count("CRITICAL") == 0`) was a tautology that could never
+        # fail on a real finding: Scout's own summary table always prints
+        # the literal word "CRITICAL" as a column header (e.g. "CRITICAL
+        # 0"), so the substring check was always True and short-circuited
+        # the `or`, regardless of the actual count. Refs #65 (found while
+        # verifying the anyio CVE fix -- this test passed even while that
+        # CVE was present, which is how it went undetected).
+        #
+        # Parse the real count from Scout's own summary line instead:
+        # "  CRITICAL  N   " where N is the actual number found.
         if result.returncode == 0:
-            assert "CRITICAL" not in result.stdout.upper() or \
-                   result.stdout.count("CRITICAL") == 0
+            critical_match = re.search(
+                r"CRITICAL\s+(\d+)", result.stdout, re.IGNORECASE
+            )
+            critical_count = int(critical_match.group(1)) if critical_match else 0
+            assert critical_count == 0, (
+                f"Found {critical_count} CRITICAL vulnerabilities:\n{result.stdout}"
+            )
 
 
 @pytest.mark.docker

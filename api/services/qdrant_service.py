@@ -25,6 +25,16 @@ try:
 except ImportError:
     _QDRANT_AVAILABLE = False
 
+    # `except UnexpectedResponse` below needs a real exception class at
+    # runtime regardless of whether qdrant_client is installed -- unlike a
+    # type annotation, Python evaluates an `except` clause's name eagerly,
+    # so this can't be deferred behind TYPE_CHECKING the way the minio/
+    # kafka services' guarded types were (Refs #53). This placeholder is
+    # never actually raised in lite mode (no qdrant calls happen), it just
+    # needs to exist so the `except` clauses don't crash with NameError.
+    class UnexpectedResponse(Exception):
+        pass
+
 
 class QdrantService:
     """Service for interacting with Qdrant vector database"""

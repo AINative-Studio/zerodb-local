@@ -17,6 +17,7 @@ from lite.config import is_lite_mode
 from lite.sql_compat import (
     equality_filter_clause,
     jsonb_cast_sql,
+    log_cdc_change,
     merge_json_text,
     new_id,
     now_iso,
@@ -323,6 +324,14 @@ class TablesService:
 
             inserted_ids.append(str(result.id))
 
+            # Application-level CDC (Refs #63): full mode gets this for free
+            # from the table_rows INSERT trigger; lite mode has no trigger
+            # support, so log the same change_log row explicitly here.
+            if lite:
+                log_cdc_change(
+                    db, project_id, "table_row", result.id, "INSERT", row_data
+                )
+
         db.commit()
 
         return {
@@ -476,6 +485,14 @@ class TablesService:
                 """),
                 {"id": row.id, "data": merged_data, "now": now}
             )
+
+            # Application-level CDC (Refs #63): this whole branch only runs
+            # in lite mode (see early `if not is_lite_mode(): ... return`
+            # above), so no is_lite_mode() guard is needed here.
+            log_cdc_change(
+                db, project_id, "table_row", row.id, "UPDATE",
+                parse_json_column(merged_data)
+            )
             updated_count += 1
 
         db.commit()
@@ -510,6 +527,28 @@ class TablesService:
         # Soft delete rows matching the equality filter (replaces
         # PostgreSQL's @> containment operator, which SQLite lacks)
         filter_clause, filter_params = equality_filter_clause(filter_data)
+
+        lite = is_lite_mode()
+        deleted_rows = []
+        if lite:
+            # Soft-delete is a SQL UPDATE, not a DELETE, in both modes (see
+            # below) -- in full mode that fires the table_rows trigger with
+            # TG_OP = 'UPDATE', so change_log records operation 'UPDATE', not
+            # 'DELETE'. Select the matching rows first so lite mode can log
+            # the same per-row change_log entries (Refs #63) with matching
+            # ids/data, mirroring what the trigger would have recorded.
+            select_query = text(f"""
+                SELECT id, data FROM table_rows
+                WHERE table_id = :table_id
+                AND project_id = :project_id
+                AND deleted_at IS NULL
+                {filter_clause}
+            """)
+            deleted_rows = db.execute(
+                select_query,
+                {"table_id": table_id, "project_id": str(project_id), **filter_params}
+            ).fetchall()
+
         delete_query = text(f"""
             UPDATE table_rows
             SET deleted_at = {now_sql()}
@@ -524,10 +563,17 @@ class TablesService:
             "project_id": str(project_id),
             **filter_params
         }
-        if is_lite_mode():
+        if lite:
             params["now"] = now_iso()
 
         result = db.execute(delete_query, params)
+
+        if lite:
+            for row in deleted_rows:
+                log_cdc_change(
+                    db, project_id, "table_row", row.id, "UPDATE",
+                    parse_json_column(row.data)
+                )
 
         db.commit()
         return result.rowcount

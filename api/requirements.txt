@@ -1,7 +1,12 @@
 # ZeroDB Local API - Python Dependencies
 
 # Core Framework
-fastapi>=0.104.0,<0.105.0
+# fastapi was pinned <0.105.0 (released 2023), which requires anyio<4.0.0 --
+# that ceiling is what pulled in a version of anyio affected by
+# CVE-2026-63374 (improper certificate validation, fixed in anyio>=4.14.2).
+# pyproject.toml's own fastapi constraint (>=0.100.0, no ceiling) has no
+# such restriction. Refs #65.
+fastapi>=0.115.0,<1.0.0
 uvicorn[standard]>=0.24.0,<0.25.0
 python-multipart>=0.0.6
 

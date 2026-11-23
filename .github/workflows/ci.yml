@@ -91,9 +91,15 @@ jobs:
       # small margin below the current 7.8% baseline): this gate should
       # catch future regressions below today's real coverage, not
       # silently fail unconditionally like before.
+      # Refs #50: api/tests/ (19 files) was added to pyproject.toml's
+      # testpaths, but this invocation still passed `tests/` as an
+      # explicit path argument -- which overrides testpaths, so api/tests/
+      # was still never actually collected in CI despite being fixed to
+      # run standalone. Passing no path lets testpaths (both directories)
+      # take effect.
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --cov=zerodb_local --cov=api --cov=lite --cov=cli --cov-report=term-missing --cov-fail-under=7
+          python -m pytest -v --cov=zerodb_local --cov=api --cov=lite --cov=cli --cov-report=term-missing --cov-fail-under=7
 
   build:
     name: Build distribution
