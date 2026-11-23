@@ -89,11 +89,15 @@ class TestServeDefaults:
 
         assert DEFAULT_PORT == 8000
 
-    def test_default_host_is_all_interfaces(self):
-        """Given no --host flag, the default host should bind to all interfaces"""
+    def test_default_host_is_this_machine_only(self):
+        """Given no --host flag, the server is only reachable from this machine.
+
+        Local mode has no sign-in, so listening on all interfaces by default
+        would expose every project to anyone on the same network.
+        """
         from commands.serve import DEFAULT_HOST
 
-        assert DEFAULT_HOST == "0.0.0.0"
+        assert DEFAULT_HOST == "127.0.0.1"
 
     def test_default_data_dir_is_home_zerodb(self):
         """Given no --data-dir flag, the default should be ~/.zerodb/data/"""

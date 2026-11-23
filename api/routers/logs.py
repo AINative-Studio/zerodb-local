@@ -213,15 +213,32 @@ async def get_logs(
     - Total count of matching entries
     - Time range of the query
     """
-    all_services = ["postgres", "qdrant", "minio", "redpanda", "embeddings", "api", "dashboard"]
-    services_to_query = [service] if service else all_services
+    from lite.config import DATA_DIR, is_lite_mode
 
     all_logs = []
 
-    # Gather logs from all requested services
-    for svc in services_to_query:
-        service_logs = parse_docker_logs(svc, limit)
-        all_logs.extend(service_logs)
+    if is_lite_mode():
+        # Refs #97: lite mode has no Docker containers to read
+        # `docker compose logs` from at all -- read back this process's
+        # own captured output instead (installed at startup by
+        # lite.log_capture, api/main.py).
+        from lite.log_capture import read_logs as read_captured_logs
+
+        for entry in read_captured_logs(DATA_DIR, level=level, limit=limit, since_minutes=since_minutes):
+            if service and entry.get("service") != service:
+                continue
+            try:
+                all_logs.append(LogEntry(**entry))
+            except Exception:
+                continue
+    else:
+        all_services = ["postgres", "qdrant", "minio", "redpanda", "embeddings", "api", "dashboard"]
+        services_to_query = [service] if service else all_services
+
+        # Gather logs from all requested services
+        for svc in services_to_query:
+            service_logs = parse_docker_logs(svc, limit)
+            all_logs.extend(service_logs)
 
     # Apply level filter
     if level:

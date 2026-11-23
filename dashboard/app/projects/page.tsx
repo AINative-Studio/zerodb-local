@@ -1,157 +1,126 @@
 'use client'
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiClient } from '@/services/api-client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Plus, Database, Trash2, ExternalLink } from 'lucide-react'
-import { formatRelativeTime, formatNumber } from '@/lib/utils'
+import * as React from 'react'
 import Link from 'next/link'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { FolderKanban, Plus, Search, Trash2 } from 'lucide-react'
+import { apiClient } from '@/services/api-client'
+import { useProject } from '@/components/providers/project-provider'
+import { PageHeader, PageShell } from '@/components/layout/page-header'
+import { EmptyState, ErrorState, LoadingState } from '@/components/layout/states'
+import { NewProjectDialog } from '@/components/projects/new-project-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { formatNumber } from '@/lib/utils'
+import { useNewParam } from '@/lib/use-new-param'
 import type { Project } from '@/types'
 
 export default function ProjectsPage() {
-  const queryClient = useQueryClient()
+  const { projects, isLoading, error, setProjectId } = useProject()
+  const [open, setOpen] = useNewParam()
+  const [query, setQuery] = React.useState('')
+  const [toDelete, setToDelete] = React.useState<Project | null>(null)
+  const qc = useQueryClient()
 
-  const { data: projects, isLoading } = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => apiClient.listProjects(),
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (projectId: string) => apiClient.deleteProject(projectId),
+  const remove = useMutation({
+    mutationFn: (id: string) => apiClient.deleteProject(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      setToDelete(null)
     },
   })
 
-  if (isLoading) {
-    return (
-      <div className="p-8">
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-        </div>
-      </div>
-    )
-  }
+  const shown = projects.filter((p) =>
+    `${p.name} ${p.description ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())
+  )
 
   return (
-    <div className="p-8">
-      {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold mb-2">Projects</h1>
-          <p className="text-gray-600">
-            Manage your ZeroDB projects and collections
-          </p>
-        </div>
-        <Button disabled title="Create project modal coming soon">
-          <Plus className="h-4 w-4 mr-2" />
-          New Project
-        </Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Projects"
+        description="A project holds its own vectors, tables, files and events."
+        actions={
+          <Button onClick={() => setOpen(true)}>
+            <Plus aria-hidden="true" className="h-4 w-4" strokeWidth={2.5} /> New project
+          </Button>
+        }
+      />
 
-      {/* Projects Grid */}
-      {projects && projects.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onDelete={() => deleteMutation.mutate(project.id)}
-            />
-          ))}
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Database className="h-12 w-12 text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium mb-2">No projects yet</h3>
-            <p className="text-gray-500 text-center mb-4">
-              Create your first project to start using ZeroLocal
-            </p>
-            <Button disabled title="Create project modal coming soon">
-              <Plus className="h-4 w-4 mr-2" />
-              Create Project
+      {isLoading && <LoadingState label="Loading projects" />}
+      {error && <ErrorState error={error} what="projects" />}
+
+      {!isLoading && !error && projects.length === 0 && (
+        <EmptyState
+          icon={FolderKanban}
+          title="No projects yet"
+          action={
+            <Button onClick={() => setOpen(true)}>
+              <Plus aria-hidden="true" className="h-4 w-4" /> Create your first project
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          Start here. Everything else in ZeroDB Local lives inside a project.
+        </EmptyState>
       )}
 
-      {/* Create Project Modal would go here */}
-    </div>
-  )
-}
-
-interface ProjectCardProps {
-  project: Project
-  onDelete: () => void
-}
-
-function ProjectCard({ project, onDelete }: ProjectCardProps) {
-  const { data: stats } = useQuery({
-    queryKey: ['project-stats', project.id],
-    queryFn: () => apiClient.getProjectStats(project.id),
-  })
-
-  return (
-    <Card className="hover:shadow-lg transition-shadow">
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <div>
-            <CardTitle className="text-xl mb-1">{project.name}</CardTitle>
-            <CardDescription>
-              {project.description || 'No description'}
-            </CardDescription>
+      {projects.length > 0 && (
+        <>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative w-full max-w-[420px]">
+              <label htmlFor="project-search" className="sr-only">Search projects</label>
+              <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input id="project-search" placeholder="Search projects" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9" />
+            </div>
+            <span className="text-[13px] text-muted-foreground">
+              {shown.length} of {projects.length} {projects.length === 1 ? 'project' : 'projects'}
+            </span>
           </div>
-          <Badge variant="outline">Active</Badge>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {/* Stats */}
-        {stats && (
-          <div className="space-y-2 mb-4">
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Vectors</span>
-              <span className="font-medium">{formatNumber(stats.vector_count)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Tables</span>
-              <span className="font-medium">{formatNumber(stats.table_count)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Files</span>
-              <span className="font-medium">{formatNumber(stats.file_count)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Events</span>
-              <span className="font-medium">{formatNumber(stats.event_count)}</span>
-            </div>
-          </div>
-        )}
 
-        {/* Metadata */}
-        <div className="text-xs text-gray-500 mb-4">
-          Created {formatRelativeTime(project.created_at)}
-        </div>
+          <section aria-label="Project list" className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+            {shown.map((p) => (
+              <article key={p.id} className="flex flex-col gap-3.5 rounded-xl border bg-card p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <h2 className="truncate font-display text-[17px] font-semibold">{p.name}</h2>
+                    <p className="text-muted-foreground">{p.description || 'No description'}</p>
+                  </div>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Delete ${p.name}`} onClick={() => setToDelete(p)}>
+                    <Trash2 aria-hidden="true" className="h-4 w-4" />
+                  </Button>
+                </div>
+                <dl className="grid grid-cols-4 gap-2">
+                  {(['vectors', 'tables', 'files', 'events'] as const).map((k) => (
+                    <div key={k} className="flex flex-col">
+                      <dt className="text-xs capitalize text-muted-foreground">{k}</dt>
+                      <dd className="font-mono font-medium">{formatNumber(p.usage?.[k] ?? 0)}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <div className="flex items-center justify-between gap-3 border-t pt-3">
+                  <span className="truncate font-mono text-xs text-muted-foreground">{p.id}</span>
+                  <Link href="/vectors" onClick={() => setProjectId(p.id)} className="text-[13px] font-semibold">
+                    Open
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </section>
+        </>
+      )}
 
-        {/* Actions */}
-        <div className="flex gap-2">
-          <Link href={`/projects/${project.id}`} className="flex-1">
-            <Button variant="outline" className="w-full" size="sm">
-              <ExternalLink className="h-3 w-3 mr-2" />
-              View
-            </Button>
-          </Link>
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={onDelete}
-          >
-            <Trash2 className="h-3 w-3" />
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      <NewProjectDialog open={open} onOpenChange={setOpen} />
+      <ConfirmDialog
+        open={!!toDelete}
+        onOpenChange={(o) => !o && setToDelete(null)}
+        title={`Delete ${toDelete?.name ?? 'project'}?`}
+        confirmLabel="Delete project"
+        onConfirm={() => toDelete && remove.mutate(toDelete.id)}
+        pending={remove.isPending}
+        error={remove.error}
+      >
+        This removes the project and everything in it: vectors, tables, files and events. It can’t be undone.
+      </ConfirmDialog>
+    </PageShell>
   )
 }

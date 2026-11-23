@@ -1,201 +1,230 @@
 'use client'
 
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
+import { AlertCircle, Check, Plus } from 'lucide-react'
 import { apiClient } from '@/services/api-client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useProject } from '@/components/providers/project-provider'
+import { PageHeader, PageShell } from '@/components/layout/page-header'
+import { ModeBadge } from '@/components/layout/mode-badge'
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Database, HardDrive, Activity, AlertCircle, CheckCircle, FolderOpen } from 'lucide-react'
+import { CopyField } from '@/components/ui/copy-field'
+import { cn, formatNumber, formatRelativeTime } from '@/lib/utils'
+import { useMounted } from '@/lib/use-mounted'
+import { summarizeEventData } from '@/lib/events'
+import type { ProjectUsage } from '@/types'
 
-// Lite mode (SQLite + FAISS + filesystem, zero-infrastructure default) and
-// full mode (PostgreSQL + Qdrant + MinIO + RedPanda + embeddings, Docker
-// stack) report entirely different service keys in /health -- render
-// whichever set actually matches `backend` instead of assuming full mode.
+// Lite mode (SQLite + FAISS + filesystem, the zero-infrastructure default)
+// and full mode (Docker stack) report different service keys in /health --
+// render whichever set matches `backend` instead of assuming full mode.
 const FULL_MODE_SERVICES = [
-  { key: 'postgres', name: 'PostgreSQL', icon: Database, description: 'Primary database' },
-  { key: 'qdrant', name: 'Qdrant', icon: Activity, description: 'Vector search engine' },
-  { key: 'minio', name: 'MinIO', icon: HardDrive, description: 'Object storage' },
-  { key: 'redpanda', name: 'RedPanda', icon: Activity, description: 'Event streaming' },
-  { key: 'embeddings', name: 'Embeddings', icon: Activity, description: 'Local embeddings (BAAI BGE)' },
+  { key: 'postgres', name: 'PostgreSQL', role: 'Projects, tables, events, memory' },
+  { key: 'qdrant', name: 'Qdrant', role: 'Vector index and search' },
+  { key: 'minio', name: 'MinIO', role: 'File storage' },
+  { key: 'redpanda', name: 'RedPanda', role: 'Event streaming' },
+  { key: 'embeddings', name: 'Embeddings', role: 'Local embeddings (BAAI BGE)' },
 ] as const
 
 const LITE_MODE_SERVICES = [
-  { key: 'sqlite', name: 'SQLite', icon: Database, description: 'Primary database' },
-  { key: 'faiss', name: 'FAISS', icon: Activity, description: 'Vector search engine' },
-  { key: 'filesystem', name: 'Filesystem', icon: FolderOpen, description: 'Local file storage' },
+  { key: 'sqlite', name: 'SQLite', role: 'Projects, tables, events, memory' },
+  { key: 'faiss', name: 'FAISS', role: 'Vector index and search' },
+  { key: 'filesystem', name: 'Filesystem', role: 'File storage' },
 ] as const
 
-export default function DashboardPage() {
-  const { data: health, isLoading, error } = useQuery({
+const EMPTY_USAGE: ProjectUsage = { vectors: 0, tables: 0, events: 0, memory: 0, files: 0 }
+
+export default function OverviewPage() {
+  const health = useQuery({
     queryKey: ['health'],
     queryFn: () => apiClient.getHealth(),
     refetchInterval: 5000,
   })
+  const { projects, projectId, project } = useProject()
+  const mounted = useMounted()
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'healthy':
-        return 'success'
-      case 'degraded':
-        return 'warning'
-      default:
-        return 'destructive'
+  const totals = projects.reduce<ProjectUsage>((acc, p) => {
+    const u = p.usage ?? EMPTY_USAGE
+    return {
+      vectors: acc.vectors + (u.vectors ?? 0),
+      tables: acc.tables + (u.tables ?? 0),
+      events: acc.events + (u.events ?? 0),
+      memory: acc.memory + (u.memory ?? 0),
+      files: acc.files + (u.files ?? 0),
     }
-  }
+  }, EMPTY_USAGE)
 
-  if (isLoading) {
-    return (
-      <div className="p-8">
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-        </div>
-      </div>
-    )
-  }
+  const recent = useQuery({
+    queryKey: ['events', projectId, 'recent'],
+    queryFn: () => apiClient.listEvents(projectId!, { limit: 5 }),
+    enabled: !!projectId,
+  })
 
-  if (error) {
-    return (
-      <div className="p-8">
-        <Card className="border-red-200 bg-red-50">
-          <CardHeader>
-            <CardTitle className="text-red-800 flex items-center gap-2">
-              <AlertCircle className="h-5 w-5" />
-              Connection Error
-            </CardTitle>
-            <CardDescription className="text-red-600">
-              Unable to connect to ZeroDB API at localhost:8000
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-red-700">{error?.message || 'Unknown error'}</p>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
+  const services = health.data?.backend === 'lite' ? LITE_MODE_SERVICES : FULL_MODE_SERVICES
+  const hasProject = projects.length > 0
+  const hasData = totals.vectors + totals.tables > 0
 
   return (
-    <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">ZeroLocal Dashboard</h1>
-        <p className="text-gray-600">Monitor your self-hosted AI database</p>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Overview"
+        description="Your local ZeroDB, running on this machine."
+        actions={<ModeBadge />}
+      />
 
-      {/* System Status Overview */}
-      <div className="mb-6">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>System Status</CardTitle>
-                <CardDescription>Overall health of all services</CardDescription>
-              </div>
-              <Badge variant={getStatusColor(health?.status || 'unhealthy')}>
-                {health?.status?.toUpperCase()}
-              </Badge>
+      {!(hasProject && hasData) && (
+        <section
+          aria-labelledby="first-steps"
+          className="flex flex-wrap items-center justify-between gap-6 rounded-xl border bg-card p-6"
+        >
+          <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-3.5">
+            <div className="flex flex-col gap-1">
+              <h2 id="first-steps" className="font-display text-lg font-semibold">
+                Your first five minutes
+              </h2>
+              <p className="text-muted-foreground">Everything here can be done from the dashboard. No API calls or CLI needed.</p>
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm text-gray-600">
-              {health?.summary?.healthy ?? 0} of {health?.summary?.total ?? 0} services operational
+            <ol className="flex flex-wrap gap-2.5">
+              <Step n={1} done={hasProject} label="Create a project" />
+              <Step n={2} done={hasData} label="Add a table or vector" />
+              <Step n={3} done={false} label="Search it" />
+            </ol>
+          </div>
+          <div className="flex flex-wrap gap-2.5">
+            {hasProject ? (
+              <>
+                <Button asChild>
+                  <Link href="/vectors?new=1" className="text-primary-foreground no-underline">
+                    <Plus className="h-4 w-4" /> Upsert a vector
+                  </Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link href="/tables?new=1" className="text-foreground no-underline">Create a table</Link>
+                </Button>
+              </>
+            ) : (
+              <Button asChild>
+                <Link href="/projects?new=1" className="text-primary-foreground no-underline">
+                  <Plus className="h-4 w-4" /> New project
+                </Link>
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
+
+      <section aria-label="Resource totals" className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-4">
+        <Stat href="/projects" label="Projects" value={projects.length} />
+        <Stat href="/vectors" label="Vectors" value={totals.vectors} />
+        <Stat href="/tables" label="Tables" value={totals.tables} />
+        <Stat href="/memory" label="Memories" value={totals.memory} />
+        <Stat href="/files" label="Files" value={totals.files} />
+        <Stat href="/events" label="Events" value={totals.events} />
+      </section>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-4">
+        <section aria-labelledby="svc" className="flex flex-col gap-3.5 rounded-xl border bg-card p-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 id="svc" className="font-display text-base font-semibold">Services</h2>
+            {health.data && (
+              <span className={cn('text-[13px] font-semibold', health.data.status === 'healthy' ? 'text-success' : 'text-warning')}>
+                {health.data.summary.healthy} of {health.data.summary.total} healthy
+              </span>
+            )}
+          </div>
+          {health.isLoading && <p className="text-muted-foreground">Checking services…</p>}
+          {health.error && (
+            <div role="alert" className="flex items-start gap-2 text-sm">
+              <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <span>
+                Can’t reach the API at <span className="font-mono">{apiClient.baseURL}</span>. {(health.error as Error).message}
+              </span>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+          )}
+          {health.data &&
+            services.map((svc) => {
+              const s = health.data.services?.[svc.key]
+              const ok = s?.status === 'healthy'
+              return (
+                <div key={svc.key} className="flex items-center gap-3 rounded-lg bg-muted px-3.5 py-3">
+                  <span aria-hidden="true" className={cn('h-2 w-2 shrink-0 rounded-full', ok ? 'bg-emerald-500' : 'bg-destructive')} />
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <strong className="font-semibold">{svc.name}</strong>
+                    <span className="text-xs text-muted-foreground">{s?.error ?? svc.role}</span>
+                  </div>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {s?.latency_ms != null ? `${Math.round(s.latency_ms)} ms` : ok ? 'healthy' : s ? 'unhealthy' : 'not reported'}
+                  </span>
+                </div>
+              )
+            })}
+          {health.data?.backend === 'lite' && (
+            <p className="text-[13px] text-muted-foreground">
+              Postgres, Qdrant, MinIO and RedPanda only run in full mode. Lite mode doesn’t need them.
+            </p>
+          )}
+        </section>
 
-      {/* Service Status Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-        {(health?.backend === 'full' ? FULL_MODE_SERVICES : LITE_MODE_SERVICES).map((service) => (
-          <ServiceCard
-            key={service.key}
-            name={service.name}
-            status={health?.services?.[service.key]?.status || 'unhealthy'}
-            latency={health?.services?.[service.key]?.latency_ms}
-            icon={<service.icon className="h-5 w-5" />}
-            description={service.description}
-          />
-        ))}
-      </div>
+        <section aria-labelledby="conn" className="flex flex-col gap-3.5 rounded-xl border bg-card p-5">
+          <h2 id="conn" className="font-display text-base font-semibold">Connect your app</h2>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">API endpoint</span>
+            <CopyField value={mounted ? apiClient.baseURL : ''} label="API endpoint" />
+          </div>
+          <p className="text-[13px] text-muted-foreground">
+            Read from your running config, not hardcoded. See <Link href="/settings">Settings</Link>.
+          </p>
+        </section>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>API Endpoint</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">localhost:8000</div>
-            <p className="text-xs text-gray-500 mt-1">Local development</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Dashboard</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">localhost:3000</div>
-            <p className="text-xs text-gray-500 mt-1">This interface</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Version</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">1.0.0</div>
-            <p className="text-xs text-gray-500 mt-1">ZeroLocal</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Mode</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">Local</div>
-            <p className="text-xs text-gray-500 mt-1">No API costs</p>
-          </CardContent>
-        </Card>
+        <section aria-labelledby="recent" className="flex flex-col gap-2.5 rounded-xl border bg-card p-5">
+          <div className="flex items-baseline justify-between">
+            <h2 id="recent" className="font-display text-base font-semibold">
+              Recent activity {project && <span className="font-mono text-sm font-normal text-muted-foreground">· {project.name}</span>}
+            </h2>
+            <Link href="/events" className="text-[13px] font-medium">All events</Link>
+          </div>
+          {!projectId && <p className="text-muted-foreground">Nothing yet. Activity shows up here once you create a project.</p>}
+          {recent.data?.length === 0 && <p className="text-muted-foreground">No events in this project yet.</p>}
+          {recent.data?.map((e) => (
+            <div key={e.id} className="flex items-center gap-2.5 border-b py-2 last:border-b-0">
+              <Badge variant="accent" className="rounded">{e.event_type}</Badge>
+              <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{summarizeEventData(e.event_data, 2)}</span>
+              {e.timestamp && <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(e.timestamp)}</span>}
+            </div>
+          ))}
+        </section>
       </div>
-    </div>
+    </PageShell>
   )
 }
 
-interface ServiceCardProps {
-  name: string
-  status: string
-  latency?: number
-  icon: React.ReactNode
-  description: string
+function Step({ n, done, label }: { n: number; done: boolean; label: string }) {
+  return (
+    <li
+      className={cn(
+        'flex items-center gap-2 rounded-lg px-3 py-2 font-medium',
+        done ? 'bg-success-muted text-success' : 'bg-muted'
+      )}
+    >
+      {done ? (
+        <Check aria-hidden="true" className="h-4 w-4" strokeWidth={2.5} />
+      ) : (
+        <span className="font-mono text-xs text-muted-foreground">{n}</span>
+      )}
+      {label}
+      {done && <span className="sr-only">(done)</span>}
+    </li>
+  )
 }
 
-function ServiceCard({ name, status, latency, icon, description }: ServiceCardProps) {
-  const isHealthy = status === 'healthy'
-
+function Stat({ href, label, value }: { href: string; label: string; value: number }) {
   return (
-    <Card className={isHealthy ? 'border-green-200' : 'border-red-200'}>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {icon}
-            <CardTitle className="text-lg">{name}</CardTitle>
-          </div>
-          {isHealthy ? (
-            <CheckCircle className="h-5 w-5 text-green-600" />
-          ) : (
-            <AlertCircle className="h-5 w-5 text-red-600" />
-          )}
-        </div>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="flex items-center justify-between">
-          <Badge variant={isHealthy ? 'success' : 'destructive'}>
-            {status}
-          </Badge>
-          {latency && (
-            <span className="text-xs text-gray-500">{latency}ms</span>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+    <Link
+      href={href}
+      className="flex flex-col gap-1.5 rounded-xl border bg-card p-[18px] text-foreground no-underline transition-colors hover:border-primary"
+    >
+      <span className="text-[13px] font-medium text-muted-foreground">{label}</span>
+      <span className="font-mono text-[28px] font-medium tracking-tight">{formatNumber(value)}</span>
+    </Link>
   )
 }
