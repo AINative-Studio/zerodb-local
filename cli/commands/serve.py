@@ -79,7 +79,10 @@ def setup_environment(
         cloud_key: Optional API key for cloud sync
     """
     os.environ["ZERODB_BACKEND"] = "lite"
-    os.environ["ZERODB_DATA_DIR"] = str(data_dir)
+    # Resolve to an absolute path before the server chdir's into api/ below
+    # (Refs #75) -- a relative --data-dir would otherwise end up resolved
+    # against api/ instead of the directory the user actually meant.
+    os.environ["ZERODB_DATA_DIR"] = str(Path(data_dir).resolve())
 
     if cloud_key:
         os.environ["ZERODB_CLOUD_KEY"] = cloud_key
@@ -160,9 +163,28 @@ def serve(
     # Print startup banner
     print_startup_banner(host, port, data_dir)
 
-    # Start the server
+    # Start the server. The FastAPI app lives in api/main.py (package
+    # "api" per pyproject.toml, not "app" -- no "app" package exists
+    # anywhere in this repo or an installed distribution; Refs #75). It
+    # also uses sibling-relative imports internally (e.g. "from health
+    # import ..."), so api/ itself must be the working directory for
+    # those to resolve, not just importable as a dotted package -- find
+    # it via importlib (api has no __init__.py, so it is a namespace
+    # package whose location varies between a source checkout and an
+    # installed distribution) and chdir into it before loading "main:app",
+    # the same way the test suite's lite_server fixture already runs it.
+    import importlib.util
+
+    api_spec = importlib.util.find_spec("api")
+    if api_spec is None or not api_spec.submodule_search_locations:
+        console.print("[red]Error:[/red] could not locate the 'api' package.")
+        raise typer.Exit(code=1)
+    api_dir = list(api_spec.submodule_search_locations)[0]
+    os.chdir(api_dir)
+    sys.path.insert(0, api_dir)
+
     uvicorn.run(
-        "app.main:app",
+        "main:app",
         host=host,
         port=port,
         reload=reload,
