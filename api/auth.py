@@ -3,6 +3,7 @@ Authentication Module for ZeroLocal
 Integrates with AINative cloud authentication system
 """
 import os
+import secrets
 import httpx
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -30,15 +31,19 @@ security = HTTPBearer(auto_error=False)
 # Environment configuration
 CLOUD_API_URL = os.getenv("CLOUD_API_URL", "https://api.ainative.studio")
 
-# Default to local auth in lite mode (no cloud dependency needed)
-_default_auth_mode = "cloud"
-try:
-    from lite.config import is_lite_mode
-    if is_lite_mode():
-        _default_auth_mode = "local"
-except ImportError:
-    pass
-AUTH_MODE = os.getenv("ZERODB_AUTH_MODE", _default_auth_mode)
+# Sign-in mode. ZeroDB Local is a single-developer tool, so both backends
+# default to "local" (no login, one built-in user). Cloud sign-in -- every
+# request validated against ZeroDB Cloud -- is opt-in with
+# ZERODB_AUTH_MODE=cloud. Servers bind to 127.0.0.1 by default, so local
+# mode is only reachable from this machine unless someone opts in.
+AUTH_MODE = os.getenv("ZERODB_AUTH_MODE", "local").strip().lower() or "local"
+
+# Optional shared key for local mode. When set, every request must send
+# `Authorization: Bearer <key>` -- use it whenever the server is reachable
+# from other machines (--host 0.0.0.0, Docker port published on all
+# interfaces, a VM, a home server). The dashboard sends it from
+# Settings > Connection.
+LOCAL_API_KEY = os.getenv("ZERODB_LOCAL_API_KEY", "").strip()
 
 
 # Cached cloud user (avoids re-validating on every request)
@@ -86,18 +91,29 @@ async def get_current_user(
     """
     Get current authenticated user.
 
-    Cloud mode (default): Validates against AINative cloud API using:
+    Local mode (default): returns the built-in local user. If
+    ZERODB_LOCAL_API_KEY is set, the request must carry it as a Bearer token.
+
+    Cloud mode (ZERODB_AUTH_MODE=cloud): validates against the AINative cloud API using:
       1. CLOUD_API_KEY env var (auto-auth, no headers needed)
       2. X-API-Key header
       3. Authorization: Bearer <jwt> header
 
-    Local mode: Returns mock user for offline development.
-    Set ZERODB_AUTH_MODE=local for offline dev.
     """
     global _cached_cloud_user, _cached_api_key
 
     # Local-only mode (offline development)
     if AUTH_MODE == "local":
+        if LOCAL_API_KEY:
+            supplied = credentials.credentials if credentials else ""
+            # Constant-time comparison so the key can't be guessed by timing.
+            if not secrets.compare_digest(supplied.encode(), LOCAL_API_KEY.encode()):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="This server requires its local access key "
+                    "(ZERODB_LOCAL_API_KEY). Send it as Authorization: Bearer <key>.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
         return User(
             id=os.getenv("ZERODB_USER_ID", "00000000-0000-0000-0000-000000000001"),
             email=os.getenv("ZERODB_USER_EMAIL", "dev@localhost"),

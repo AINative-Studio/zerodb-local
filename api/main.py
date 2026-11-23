@@ -4,7 +4,7 @@ Main entry point for the local API server
 """
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -36,6 +36,7 @@ from routers.sync_history import router as sync_history_router
 from routers.raymond import router as raymond_router
 
 # Backend selector
+from auth import get_current_user_flexible
 from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode, is_full_mode
 
 from services.minio_service import minio_service
@@ -187,58 +188,70 @@ async def health_check():
 
 
 # Include routers at both /v1/ (local dev) and /api/v1/ (cloud sync compat)
+# Every router requires sign-in (local mode: none, or ZERODB_LOCAL_API_KEY if
+# set; cloud mode: a ZeroDB API key). Applied here rather than trusting each
+# route to declare it -- several sync, export and logs routes never did.
+# /health and / are registered directly on the app and stay open.
+_signed_in = [Depends(get_current_user_flexible)]
+
 for _prefix_base in ["/v1", "/api/v1"]:
-    app.include_router(projects_router, prefix=f"{_prefix_base}/projects", tags=["Projects"])
-    app.include_router(vectors_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/vectors", tags=["Vectors"])
-    app.include_router(memory_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/memory", tags=["Memory"])
-    app.include_router(tables_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/tables", tags=["Tables"])
-    app.include_router(files_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/files", tags=["Files"])
-    app.include_router(events_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/events", tags=["Events"])
-    app.include_router(sync_state_router, prefix=f"{_prefix_base}/projects/{{project_id}}/sync", tags=["Sync State"])
-    app.include_router(cloud_sync_router, prefix=f"{_prefix_base}/projects", tags=["Cloud Sync"])
+    app.include_router(projects_router, prefix=f"{_prefix_base}/projects", tags=["Projects"], dependencies=_signed_in)
+    app.include_router(vectors_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/vectors", tags=["Vectors"], dependencies=_signed_in)
+    app.include_router(memory_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/memory", tags=["Memory"], dependencies=_signed_in)
+    app.include_router(tables_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/tables", tags=["Tables"], dependencies=_signed_in)
+    app.include_router(files_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/files", tags=["Files"], dependencies=_signed_in)
+    app.include_router(events_router, prefix=f"{_prefix_base}/projects/{{project_id}}/database/events", tags=["Events"], dependencies=_signed_in)
+    app.include_router(sync_state_router, prefix=f"{_prefix_base}/projects/{{project_id}}/sync", tags=["Sync State"], dependencies=_signed_in)
+    app.include_router(cloud_sync_router, prefix=f"{_prefix_base}/projects", tags=["Cloud Sync"], dependencies=_signed_in)
 
 # Sync/CDC router (not project-scoped)
-app.include_router(change_detection_router, prefix="/v1/sync", tags=["Sync"])
-app.include_router(schema_diff_router, prefix="/v1/sync/schema", tags=["Schema Diff"])
+app.include_router(change_detection_router, prefix="/v1/sync", tags=["Sync"], dependencies=_signed_in)
+app.include_router(schema_diff_router, prefix="/v1/sync/schema", tags=["Schema Diff"], dependencies=_signed_in)
 
 # Raymond — RAG retrieval over the Wealth Vault / RJF corpus (issue #174)
-app.include_router(raymond_router, tags=["Raymond"])
+app.include_router(raymond_router, tags=["Raymond"], dependencies=_signed_in)
 
 # Export router (project-level export bundle creation)
 app.include_router(
     export_router,
-    tags=["Export"]
+    tags=["Export"],
+    dependencies=_signed_in,
 )
 
 # Sync Orchestrator router (core sync coordination)
 app.include_router(
     sync_orchestrator_router,
-    tags=["Sync Orchestrator"]
+    tags=["Sync Orchestrator"],
+    dependencies=_signed_in,
 )
 
 # Conflict Resolution router (nested under project sync)
 app.include_router(
     conflict_resolution_router,
-    tags=["Conflict Resolution"]
+    tags=["Conflict Resolution"],
+    dependencies=_signed_in,
 )
 
 # Pull Sync router (cloud to local sync)
 app.include_router(
     pull_sync_router,
-    tags=["Pull Sync"]
+    tags=["Pull Sync"],
+    dependencies=_signed_in,
 )
 
 # Sync History router (audit logging and history tracking)
 app.include_router(
     sync_history_router,
-    tags=["Sync History"]
+    tags=["Sync History"],
+    dependencies=_signed_in,
 )
 
 # Logs router (system logs viewing)
 app.include_router(
     logs_router,
     prefix="/v1",
-    tags=["Logs"]
+    tags=["Logs"],
+    dependencies=_signed_in,
 )
 
 
@@ -246,7 +259,9 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        # Docker runs uvicorn from its own CMD (0.0.0.0 inside the container);
+        # running this file directly is for local dev, so stay on loopback.
+        host=os.getenv("ZERODB_HOST", "127.0.0.1"),
         port=8000,
         reload=DEBUG,
         log_level=LOG_LEVEL.lower()
