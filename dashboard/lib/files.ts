@@ -3,10 +3,14 @@
 // The API has no server-side upload size limit (checked: api/routers/files.py),
 // and each file is base64-encoded in full in the browser before being posted
 // in one JSON body -- a large file can hang the tab during encoding or time
-// out the request, with no progress to show while it does. 10MB raw (~13.3MB
-// once base64-encoded) is a conservative client-side guard, not a real
-// capability ceiling; raise it if the real limit turns out to be higher.
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+// out the request, with no progress to show while it does. 100MB raw
+// (~133MB once base64-encoded) is a conservative client-side guard, not a
+// real capability ceiling, chosen to comfortably cover real dev assets
+// (datasets, PDFs, zip bundles) while staying well clear of the point
+// where base64-in-memory encoding on both ends risks hanging or crashing
+// the tab (Refs #93 -- ruled out 1GB/5GB for this reason, since neither
+// side of this upload path streams).
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 export function exceedsUploadLimit(sizeBytes: number): boolean {
   return sizeBytes > MAX_UPLOAD_BYTES
