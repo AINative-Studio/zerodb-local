@@ -61,6 +61,24 @@ describe('ApiClient', () => {
     )
   })
 
+  it('sends namespace as an explicit null, not an omitted key, when searching all namespaces', async () => {
+    // Refs #111: a plain `namespace: undefined` key gets dropped entirely
+    // by JSON.stringify, which the API used to treat as "namespace=default"
+    // rather than "no filter" -- sending null explicitly keeps that intent
+    // unambiguous regardless of the server's own default.
+    await createApiClient(http).searchVectors(P, { query: 'refund', limit: 5 })
+    expect(http.post).toHaveBeenCalledWith(
+      `${base}/vectors/search`,
+      {
+        query: 'refund',
+        namespace: null,
+        limit: 5,
+        threshold: 0,
+      },
+      { timeout: 90000 }
+    )
+  })
+
   it('lists vectors in a namespace', async () => {
     await createApiClient(http).listVectors(P, 'faq')
     expect(http.get).toHaveBeenCalledWith(`${base}/vectors`, { params: { namespace: 'faq', limit: 100 } })
