@@ -26,13 +26,25 @@ _SOURCE_CLI_DIR = Path(__file__).resolve().parent.parent / "cli"
 _full_app_loaded = False
 
 if _SOURCE_CLI_DIR.is_dir():
-    sys.path.insert(0, str(_SOURCE_CLI_DIR))
+    _cli_dir_str = str(_SOURCE_CLI_DIR)
+    _inserted_cli_path = _cli_dir_str not in sys.path
+    if _inserted_cli_path:
+        sys.path.insert(0, _cli_dir_str)
     try:
         from zerodb_main import app  # noqa: F401
 
         _full_app_loaded = True
     except ImportError:
         pass
+    finally:
+        # Don't leak this insertion onto the shared sys.path: other modules
+        # (notably api/'s own `main` module) must not be shadowed by cli/'s
+        # same-named modules for the lifetime of the process. Refs #101
+        if _inserted_cli_path:
+            try:
+                sys.path.remove(_cli_dir_str)
+            except ValueError:
+                pass
 
 if not _full_app_loaded:
     # Minimal standalone app for pip-installed usage
