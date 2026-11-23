@@ -2,12 +2,14 @@
 SQLAlchemy model for sync history and audit logging
 """
 from sqlalchemy import Column, String, Integer, BigInteger, Text, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from uuid import uuid4
 import uuid
+
+from models.types import LiteCompatibleDateTime as TIMESTAMP
 
 Base = declarative_base()
 
