@@ -300,7 +300,7 @@ async def get_vector_stats(
                             detail=f"Error retrieving vector stats: {str(e)}")
 
 
-@router.get("/{vector_id}", response_model=VectorResponse)
+@router.get("/{vector_id:path}", response_model=VectorResponse)
 async def get_vector(
     project_id: UUID,
     vector_id: str,
@@ -345,7 +345,7 @@ async def get_vector(
         )
 
 
-@router.delete("/{vector_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{vector_id:path}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_vector(
     project_id: UUID,
     vector_id: str,

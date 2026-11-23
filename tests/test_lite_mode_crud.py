@@ -13,6 +13,7 @@ established in tests/test_integration_lite.py.
 import os
 import time
 import threading
+from urllib.parse import quote
 
 import pytest
 import httpx
@@ -321,6 +322,39 @@ class TestVectorsCRUD:
             timeout=10,
         )
         assert get_after_delete.status_code == 404
+
+    def test_custom_vector_id_containing_slash_is_reachable(self, lite_server, project_id):
+        """
+        Dashboard redesign handoff (docs/features/DASHBOARD_REDESIGN.md)
+        flagged: a custom vector_id like "faq/refund-policy" is a realistic
+        choice for namespacing IDs by hand (VectorResponse has both `id`,
+        the real DB primary key, and `vector_id`, the user's custom label --
+        GET/DELETE match on either). But /vectors/{vector_id} declared the
+        path param as a plain str -- FastAPI/Starlette decode the
+        URL-encoded slash back into a literal "/" before routing, so a
+        single path segment can never match it and the request 404s.
+        """
+        custom_id = "faq/refund-policy"
+        upsert_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
+            json={"document": "refunds within 30 days", "vector_id": custom_id},
+            timeout=90,
+        )
+        assert upsert_resp.status_code == 200, upsert_resp.text
+        assert upsert_resp.json()["vector_id"] == custom_id
+
+        get_resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/{quote(custom_id, safe='')}",
+            timeout=10,
+        )
+        assert get_resp.status_code == 200, get_resp.text
+        assert get_resp.json()["vector_id"] == custom_id
+
+        delete_resp = httpx.delete(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/{quote(custom_id, safe='')}",
+            timeout=10,
+        )
+        assert delete_resp.status_code == 204, delete_resp.text
 
 
 class TestEventsCRUD:
