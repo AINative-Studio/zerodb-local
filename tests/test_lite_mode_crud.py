@@ -548,6 +548,64 @@ class TestVectorDataDirIsolation:
                 proc_a.wait(timeout=5)
 
 
+class TestLogsCaptureRealActivity:
+    """
+    Refs #97: GET /v1/logs always returned zero log lines in lite mode,
+    regardless of real server activity, because the endpoint's only data
+    source was `docker compose logs <service>` -- lite mode has no
+    containers at all, and the "Docker not available" synthetic-log
+    fallback only fires on FileNotFoundError, which never happens on a
+    machine that has Docker installed (just not running this project's
+    stack). Confirmed live: the subprocess ran against a hardcoded,
+    wrong `cwd`, hit an unrelated project's docker-compose config, and
+    silently returned an empty list with exit code 0.
+
+    This test drives real HTTP activity against a real lite-mode server
+    (including a sync-plan call, so sync's own logger.info/error output
+    -- api/services/sync_orchestrator.py already logs real sync steps via
+    the standard `logging` module -- is exercised the same way ordinary
+    request logging is) and confirms that activity is actually readable
+    back through GET /v1/logs, not just present in the subprocess's own
+    stdout.
+    """
+
+    def test_real_requests_and_sync_activity_appear_in_logs(self, lite_server, project_id):
+        # Generate real activity: an ordinary CRUD call, and a sync-plan
+        # call so sync_orchestrator's own logger.info output is exercised
+        # the same way (Refs the user's "align with cloud sync for
+        # events" request -- sync already logs through standard logging,
+        # this just confirms that becomes visible once logs are captured
+        # at all).
+        httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/events",
+            json={"event_type": "test.logs_marker", "event_data": {}, "source": "test"},
+            timeout=10,
+        )
+        httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/sync/plan",
+            json={"direction": "push"},
+            timeout=10,
+        )
+
+        # Give the file handler a moment to flush.
+        time.sleep(0.5)
+
+        logs_resp = httpx.get(f"{lite_server}/v1/logs?since_minutes=5&limit=500", timeout=10)
+        assert logs_resp.status_code == 200, logs_resp.text
+        data = logs_resp.json()
+        assert data["total_count"] > 0, (
+            "GET /v1/logs returned zero entries despite real request activity "
+            "in the selected time window -- lite mode has no real log capture."
+        )
+
+        messages = " ".join(log["message"] for log in data["logs"])
+        assert project_id in messages or "sync" in messages.lower() or "events" in messages.lower(), (
+            "Expected at least one captured log line referencing the real "
+            "activity just generated (the project id, or a sync/events "
+            "request), got: " + repr(data["logs"][:5])
+        )
+
+
 class TestEventsCRUD:
     """Refs #47: events_service hardcoded CAST(... AS jsonb) and crashed on
     .isoformat() against SQLite's string timestamps."""
