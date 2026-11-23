@@ -219,21 +219,28 @@ CREATE INDEX IF NOT EXISTS idx_sync_history_status ON sync_history(status);
 -- ==========================================
 -- CONFLICT LOG TABLE
 -- ==========================================
+-- Column shape mirrors api/models/conflict_log.py's ConflictLog ORM model
+-- (the same model full mode uses, via api/db/migrations/004_conflict_log.sql)
+-- 1:1 -- Refs #79: an earlier, different shape here (local_value/
+-- cloud_value/local_timestamp/cloud_timestamp/resolved_value, no
+-- detected_at/conflict_metadata/notes) predated that model and broke every
+-- ORM query against this table in lite mode with
+-- "no such column: conflict_log.local_version".
 CREATE TABLE IF NOT EXISTS conflict_log (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
-    local_value TEXT,
-    cloud_value TEXT,
-    local_timestamp TEXT,
-    cloud_timestamp TEXT,
-    resolution_strategy TEXT,
-    resolved_value TEXT,
-    resolved_at TEXT,
-    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    local_version TEXT NOT NULL,
+    cloud_version TEXT NOT NULL,
+    resolution_strategy TEXT NOT NULL,
+    chosen_version TEXT NOT NULL,
+    detected_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    resolved_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    conflict_metadata TEXT DEFAULT '{}',
+    notes TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_conflict_log_project_id ON conflict_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_conflict_log_entity ON conflict_log(project_id, entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_conflict_log_created_at ON conflict_log(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conflict_log_detected_at ON conflict_log(project_id, detected_at DESC);
