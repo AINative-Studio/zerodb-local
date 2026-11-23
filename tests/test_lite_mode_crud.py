@@ -664,3 +664,69 @@ class TestSyncStatusAndHistory:
         assert items[0]["sync_id"] == str(sync_id)
         assert items[0]["direction"] == "push"
         assert items[0]["mode"] == "full"
+
+
+class TestSyncConflicts:
+    """Refs #79: GET /sync/conflicts/ on a fresh lite database. Same shape
+    as #73's sync_history fix -- api/models/conflict_log.py's ConflictLog
+    ORM model expects local_version/cloud_version/chosen_version/
+    detected_at/conflict_metadata/notes (matching the full/Postgres
+    migration it mirrors), but lite/db/schema_lite.sql's conflict_log table
+    had an older, different shape (local_value/cloud_value/
+    local_timestamp/cloud_timestamp/resolved_value, no detected_at/
+    conflict_metadata/notes at all) -- any ORM query against conflict_log
+    in lite mode hit the column mismatch."""
+
+    def test_list_conflicts_on_fresh_project(self, lite_server, project_id):
+        resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/sync/conflicts/",
+            params={"limit": 100},
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+
+    def test_conflicts_round_trips_a_real_entry(
+        self, lite_server, lite_server_db_path, project_id
+    ):
+        """Seed a real conflict_log row directly on-disk (raw sqlite3, same
+        reasoning as TestSyncStatusAndHistory's round-trip test for why not
+        an in-process database.py import), then read it back over the real
+        HTTP endpoint -- confirms the ORM-expected columns actually
+        round-trip."""
+        import json
+        import sqlite3
+        import uuid as uuid_mod
+
+        conflict_id = uuid_mod.uuid4()
+        conn = sqlite3.connect(lite_server_db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO conflict_log
+                    (id, project_id, entity_type, entity_id, local_version,
+                     cloud_version, resolution_strategy, chosen_version,
+                     detected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """,
+                (
+                    conflict_id.hex, uuid_mod.UUID(project_id).hex,
+                    "vector", "vec-1",
+                    json.dumps({"text": "local"}), json.dumps({"text": "cloud"}),
+                    "newest_wins", json.dumps({"text": "cloud"}),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/sync/conflicts/",
+            params={"limit": 100},
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()
+        assert len(items) == 1
+        assert items[0]["entity_type"] == "vector"
+        assert items[0]["resolution_strategy"] == "newest_wins"
