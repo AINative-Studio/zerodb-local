@@ -19,6 +19,8 @@ from auth import get_current_user_flexible, User
 
 # Import database service
 from services.database_service import database_service
+from lite.config import is_lite_mode
+from lite.sql_compat import jsonb_cast_sql, now_iso, now_sql
 
 
 import json as _json
@@ -237,8 +239,10 @@ async def update_project(
         update_fields.append("description = :description")
         params["description"] = project.description
 
+    lite = is_lite_mode()
+
     if project.settings is not None:
-        update_fields.append("settings = CAST(:settings AS jsonb)")
+        update_fields.append(f"settings = {jsonb_cast_sql(':settings', lite)}")
         import json as _json
         params["settings"] = _json.dumps(project.settings)
 
@@ -246,7 +250,9 @@ async def update_project(
         # No fields to update, just return current project
         return await get_project(project_id, current_user, db)
 
-    update_fields.append("updated_at = NOW()")
+    update_fields.append(f"updated_at = {now_sql(lite)}")
+    if lite:
+        params["now"] = now_iso()
 
     update_query = text(f"""
         UPDATE projects
@@ -281,19 +287,21 @@ async def delete_project(
     - 204 No Content on success
     """
     # Soft delete the project
-    delete_query = text("""
+    lite = is_lite_mode()
+    delete_query = text(f"""
         UPDATE projects
-        SET deleted_at = NOW()
+        SET deleted_at = {now_sql(lite)}
         WHERE id = :project_id
         AND user_id = :user_id
         AND deleted_at IS NULL
         RETURNING id
     """)
 
-    result = db.execute(
-        delete_query,
-        {"project_id": str(project_id), "user_id": str(current_user.id)}
-    ).first()
+    delete_params = {"project_id": str(project_id), "user_id": str(current_user.id)}
+    if lite:
+        delete_params["now"] = now_iso()
+
+    result = db.execute(delete_query, delete_params).first()
 
     if not result:
         raise HTTPException(
