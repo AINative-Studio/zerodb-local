@@ -31,6 +31,62 @@ os.environ["ZERODB_BACKEND"] = "lite"
 os.environ["TESTING"] = "true"
 
 
+# Top-level module names (and their submodules, matched by prefix) that
+# main.py's import graph pulls in, directly or transitively: routers,
+# services, schemas, lite.*, plus main/database/health/middleware/auth
+# themselves. See _force_reimport_lite_stack()'s docstring for why every
+# one of these -- not just the handful with an obviously
+# ZERODB_DATA_DIR-derived constant -- must be dropped together.
+_APP_MODULE_PREFIXES = (
+    "main",
+    "database",
+    "health",
+    "auth",
+    "middleware",
+    "routers",
+    "services",
+    "schemas",
+    "lite",
+)
+
+
+def _force_reimport_lite_stack():
+    """
+    Drop every cached module in main.py's import graph before (re)setting
+    ZERODB_DATA_DIR and importing `main`, so this test module gets a
+    genuinely fresh app wired end-to-end to the directory it's about to set
+    -- regardless of what any earlier test file already imported.
+
+    lite.config.DATA_DIR, lite.services.database_service_lite's
+    DEFAULT_DATA_DIR/DEFAULT_DB_PATH, and api.database's engine/DATABASE_URL
+    are plain module-level constants computed once, at each module's FIRST
+    import in the whole pytest process -- from whatever ZERODB_DATA_DIR
+    happened to be set at that exact moment. Because pytest runs every test
+    file's tests in one process and Python caches imports in sys.modules, an
+    earlier test file (test_backend_selector.py's _reload_config,
+    test_database_service_lite.py's fixtures, or test_integration_lite.py's
+    own lite_server fixture) can leave these frozen to a *different*
+    directory than the one this module's own fixture sets below.
+
+    Popping only those few obviously-affected modules is NOT enough: a
+    fresh `from main import app` still re-finds routers.*/services.* already
+    sitting in sys.modules from an earlier import and reuses those cached
+    module objects as-is (Python does not re-execute an already-imported
+    module's body) -- so e.g. routers/sync_orchestrator.py's module-level
+    `from database import get_db` stays bound to the OLD database module's
+    OLD SessionLocal/engine even though `database` itself gets reloaded,
+    silently splitting the "fresh" app across old and new engines (hit in
+    CI as "no such table: sync_state": table creation went through one
+    engine, the sync_state read through the other, stale one). Dropping
+    every module under these prefixes forces the whole graph to rebuild
+    consistently against the ZERODB_DATA_DIR this fixture is about to set.
+    """
+    import sys
+    for mod in list(sys.modules):
+        if mod.split(".")[0] in _APP_MODULE_PREFIXES:
+            sys.modules.pop(mod, None)
+
+
 @pytest.fixture(scope="module")
 def lite_server(tmp_path_factory):
     """
@@ -45,6 +101,8 @@ def lite_server(tmp_path_factory):
     api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
     if api_dir not in sys.path:
         sys.path.insert(0, os.path.abspath(api_dir))
+
+    _force_reimport_lite_stack()
 
     try:
         from main import app
@@ -73,6 +131,11 @@ def lite_server(tmp_path_factory):
 
     server.should_exit = True
     thread.join(timeout=5)
+
+    # Leave the module cache the way this fixture found it, so a test file
+    # that runs after this one in the same pytest process gets to make its
+    # own fresh import decision instead of inheriting this module's.
+    _force_reimport_lite_stack()
 
 
 @pytest.fixture()
