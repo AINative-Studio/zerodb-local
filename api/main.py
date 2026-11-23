@@ -48,6 +48,7 @@ if is_lite_mode():
     _install_log_capture(DATA_DIR)
 
 from services.minio_service import minio_service
+from services import durability as durability_service
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -80,6 +81,13 @@ async def lifespan(app: FastAPI):
     # NoSuchBucket until this ran).
     if is_full_mode():
         await minio_service.initialize_bucket()
+
+    # Refs #107: launching DBOS also triggers its own automatic recovery
+    # of any workflow left incomplete by a previous crash (e.g. a vector
+    # upsert that reached its SQL write but not its Qdrant/FAISS write) --
+    # this is what actually resumes interrupted work, not anything in the
+    # request path itself.
+    durability_service.launch()
 
     print("✅ All services initialized")
     print("=" * 60)

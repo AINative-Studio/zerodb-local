@@ -6,6 +6,7 @@ import json
 import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
+from dbos import DBOS
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -50,6 +51,63 @@ def _id_match_clause(column: str, lite: Optional[bool] = None) -> str:
         lite = is_lite_mode()
     id_expr = "id" if lite else "id::text"
     return f"({id_expr} = :{column} OR vector_id = :{column})"
+
+
+# Refs #107: upsert_vector/delete_vector write to two independent systems
+# -- the SQL `vectors` table (committed first, already atomic on its own)
+# and Qdrant/FAISS (via qdrant_service, which dispatches to whichever
+# backend is active) -- with nothing making the pair atomic as a whole. A
+# crash between the SQL commit and the Qdrant/FAISS call previously left
+# the row permanently marked as written while the vector silently never
+# reached (or never left) the search index, with no error and no way to
+# detect the drift short of a manual reconcile.
+#
+# These are plain module-level functions, not VectorService methods: DBOS
+# resumes a workflow by replaying a reference to the function it was
+# registered under, which must be stable across a process restart --
+# resuming the SQL step is not attempted here, only the Qdrant/FAISS step,
+# since the SQL write already has its own transaction. Both the SQL write
+# (done by the caller, already committed by the time this workflow is
+# invoked) and the Qdrant/FAISS write are individually idempotent by
+# vector_id/point_id, so DBOS's at-least-once step retry on resume is
+# safe: replaying this workflow after a crash just re-applies the same
+# upsert/delete again, never duplicates anything.
+@DBOS.step()
+async def _qdrant_upsert_step(
+    project_id: str,
+    qdrant_id: str,
+    embedding: List[float],
+    payload: Dict[str, Any],
+    namespace: str,
+) -> bool:
+    return await qdrant_service.upsert_vector(
+        project_id=project_id,
+        vector_id=qdrant_id,
+        embedding=embedding,
+        payload=payload,
+        namespace=namespace,
+    )
+
+
+@DBOS.workflow()
+async def _qdrant_upsert_workflow(
+    project_id: str,
+    qdrant_id: str,
+    embedding: List[float],
+    payload: Dict[str, Any],
+    namespace: str,
+) -> bool:
+    return await _qdrant_upsert_step(project_id, qdrant_id, embedding, payload, namespace)
+
+
+@DBOS.step()
+async def _qdrant_delete_step(qdrant_id: str) -> bool:
+    return await qdrant_service.delete_vector(vector_id=qdrant_id)
+
+
+@DBOS.workflow()
+async def _qdrant_delete_workflow(qdrant_id: str) -> bool:
+    return await _qdrant_delete_step(qdrant_id)
 
 
 class VectorService:
@@ -233,11 +291,13 @@ class VectorService:
 
         db.commit()
 
-        # Step 3: Upsert in Qdrant
+        # Step 3: Upsert in Qdrant/FAISS, as a DBOS workflow (Refs #107) so
+        # a crash here resumes on next launch instead of leaving the SQL
+        # row above permanently out of sync with the search index.
         qdrant_id = f"{project_id}_{namespace}_{vector_id}"
-        await qdrant_service.upsert_vector(
-            project_id=project_id,
-            vector_id=qdrant_id,
+        await _qdrant_upsert_workflow(
+            project_id=str(project_id),
+            qdrant_id=qdrant_id,
             embedding=embedding,
             payload={
                 **metadata,
@@ -480,14 +540,15 @@ class VectorService:
 
         db.commit()
 
-        # Delete from Qdrant. NOTE: this previously passed a project_id=
-        # kwarg that neither QdrantService.delete_vector nor
-        # FAISSService.delete_vector accept (both take only vector_id/
-        # collection_name) -- a pre-existing bug independent of lite vs.
-        # full mode, fixed here because it blocks vector deletion
-        # end-to-end in both backends.
+        # Delete from Qdrant/FAISS, as a DBOS workflow (Refs #107) for the
+        # same crash-recovery reason as the upsert path above. NOTE: this
+        # previously passed a project_id= kwarg that neither
+        # QdrantService.delete_vector nor FAISSService.delete_vector
+        # accept (both take only vector_id/collection_name) -- a
+        # pre-existing bug independent of lite vs. full mode, fixed here
+        # because it blocks vector deletion end-to-end in both backends.
         qdrant_id = f"{project_id}_{result.namespace}_{vector_id}"
-        await qdrant_service.delete_vector(vector_id=qdrant_id)
+        await _qdrant_delete_workflow(qdrant_id=qdrant_id)
 
         return True
 
