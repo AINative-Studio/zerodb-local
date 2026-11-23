@@ -340,6 +340,49 @@ class TestVectorsCRUD:
         )
         assert get_after_delete.status_code == 404
 
+    def test_search_does_not_crash_when_shared_index_contains_a_memory_payload(self, lite_server, project_id):
+        """
+        Dashboard redesign e2e verification (docs/features/DASHBOARD_REDESIGN.md)
+        caught this live, reproducibly, with a BRAND NEW vector immediately
+        after upsert: Vectors and Memory share one underlying FAISS
+        index/metadata store in lite mode (api/services/qdrant_service.py's
+        module-level `qdrant_service` singleton resolves to one shared
+        FAISSService for both features). Vectors write payload["document"];
+        Memory writes payload["content"] with no "document" key at all. The
+        vectors search endpoint's VectorSearchResult schema requires
+        `document: str` (non-optional) and does `payload.get("document")`
+        on every FAISS-ranked candidate -- so once the shared index contains
+        even one memory-shaped entry, any vector search whose over-fetch
+        ranks that entry into the candidate set 500s the ENTIRE response,
+        rather than just skipping that one non-vector hit. Refs #87.
+        """
+        # Store a memory first -- this writes a payload shape with no
+        # "document" key into the SAME shared FAISS index vectors search
+        # reads from.
+        memory_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/memory/store",
+            json={"content": "the quick brown fox memory", "role": "user", "agent_id": "default"},
+            timeout=90,
+        )
+        assert memory_resp.status_code == 200, memory_resp.text
+
+        upsert_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
+            json={"document": "the quick brown fox vector", "namespace": "default", "metadata": {}},
+            timeout=90,
+        )
+        assert upsert_resp.status_code == 200, upsert_resp.text
+
+        search_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/search",
+            json={"query": "quick brown fox", "limit": 10, "threshold": 0.0},
+            timeout=30,
+        )
+        assert search_resp.status_code == 200, (
+            f"Vector search must not 500 when the shared FAISS index also "
+            f"contains memory-shaped payloads: {search_resp.text}"
+        )
+
     def test_list_vectors_with_no_namespace_filter_returns_all_namespaces(self, lite_server, project_id):
         """
         Dashboard redesign e2e verification (docs/features/DASHBOARD_REDESIGN.md)

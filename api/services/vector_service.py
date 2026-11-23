@@ -308,6 +308,13 @@ class VectorService:
         for result in results:
             payload = result.get("payload", {})
 
+            # Lite mode shares one FAISS index/metadata store across features
+            # (Refs #87/#88) -- e.g. Memory writes payload["content"], not
+            # payload["document"]. Skip any candidate that isn't vector-shaped
+            # rather than crashing the whole search on a non-vector hit.
+            if payload.get("document") is None:
+                continue
+
             # Check namespace (already filtered at Qdrant level, but double-check)
             if namespace and payload.get("namespace") != namespace:
                 continue
