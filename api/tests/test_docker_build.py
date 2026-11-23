@@ -8,6 +8,7 @@ Run with: pytest tests/test_docker_build.py -v --confcutdir=.
 Refs #1128
 """
 import pytest
+import re
 import subprocess
 import os
 import json
@@ -343,12 +344,6 @@ class TestDockerBuild:
 
     @pytest.mark.slow
     @pytest.mark.requires_docker
-    @pytest.mark.xfail(
-        reason="Real CRITICAL CVE-2026-63374 in anyio (<4.14.2, improper "
-        "certificate validation) found in the built image's locked "
-        "dependency resolution -- tracked in #65, not a test bug.",
-        strict=False,
-    )
     def test_security_scan_passes(self, docker_image_name):
         """
         GIVEN: Built Docker image
@@ -376,11 +371,28 @@ class TestDockerBuild:
         if "unknown command" in result.stderr.lower() or result.returncode == 125:
             pytest.skip("docker scout not available")
 
-        # If scout is available, check output for critical issues
-        # Don't fail on warnings, only on critical vulnerabilities
+        # If scout is available, check output for critical issues.
+        # Don't fail on warnings, only on critical vulnerabilities.
+        #
+        # The previous assertion (`"CRITICAL" not in stdout.upper() or
+        # stdout.count("CRITICAL") == 0`) was a tautology that could never
+        # fail on a real finding: Scout's own summary table always prints
+        # the literal word "CRITICAL" as a column header (e.g. "CRITICAL
+        # 0"), so the substring check was always True and short-circuited
+        # the `or`, regardless of the actual count. Refs #65 (found while
+        # verifying the anyio CVE fix -- this test passed even while that
+        # CVE was present, which is how it went undetected).
+        #
+        # Parse the real count from Scout's own summary line instead:
+        # "  CRITICAL  N   " where N is the actual number found.
         if result.returncode == 0:
-            assert "CRITICAL" not in result.stdout.upper() or \
-                   result.stdout.count("CRITICAL") == 0
+            critical_match = re.search(
+                r"CRITICAL\s+(\d+)", result.stdout, re.IGNORECASE
+            )
+            critical_count = int(critical_match.group(1)) if critical_match else 0
+            assert critical_count == 0, (
+                f"Found {critical_count} CRITICAL vulnerabilities:\n{result.stdout}"
+            )
 
 
 @pytest.mark.docker
