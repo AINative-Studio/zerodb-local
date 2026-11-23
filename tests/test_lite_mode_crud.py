@@ -120,6 +120,46 @@ class TestHealthIsLite:
         assert resp.json()["backend"] == "lite"
 
 
+class TestProjectsDeleteAndUpdate:
+    """Refs #84: api/routers/projects.py's delete_project and
+    update_project hardcode Postgres-only SQL (NOW(), CAST(... AS jsonb))
+    with zero lite/SQLite dialect branching -- the same family of bug
+    #47/#60 already fixed for every other service (tables, vectors,
+    events, memory, files), but projects.py itself was missed. A project
+    could be created in lite mode but never deleted or updated."""
+
+    def test_update_project(self, lite_server, project_id):
+        resp = httpx.patch(
+            f"{lite_server}/v1/projects/{project_id}",
+            json={"description": "updated description"},
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["description"] == "updated description"
+
+    def test_update_project_settings(self, lite_server, project_id):
+        """Exercises the CAST(:settings AS jsonb) path specifically."""
+        resp = httpx.patch(
+            f"{lite_server}/v1/projects/{project_id}",
+            json={"settings": {"foo": "bar"}},
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_delete_project(self, lite_server, project_id):
+        resp = httpx.delete(
+            f"{lite_server}/v1/projects/{project_id}",
+            timeout=10,
+        )
+        assert resp.status_code == 204, resp.text
+
+        get_resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}",
+            timeout=10,
+        )
+        assert get_resp.status_code == 404
+
+
 class TestTablesAndRowsCRUD:
     """
     Priority per issue #47: tables/rows is what the issue's repro focused
