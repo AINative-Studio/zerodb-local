@@ -143,7 +143,17 @@ export function createApiClient(http: HttpLike = createHttp()) {
       return (await http.get<Vector[]>(`${db(projectId)}/vectors`, { params: { namespace, limit } })).data
     },
     async upsertVector(projectId: string, body: UpsertVectorRequest): Promise<Vector> {
-      return (await http.post<Vector>(`${db(projectId)}/vectors/upsert`, body)).data
+      // Lite mode embeds `document` server-side with a local model
+      // (BAAI/bge-small-en-v1.5) that lazily downloads from HuggingFace Hub
+      // on first use -- a cold, unauthenticated-rate-limited load can take
+      // well over the client's default 30s timeout (confirmed live: the
+      // server returned 200 after ~15-20s on a cold start, but the request
+      // had already timed out client-side with "No response from the
+      // ZeroDB Local API"). The vector is NOT lost when this happens --
+      // it's a false-negative error, not a failed write -- but it's a
+      // confusing first-run experience. Every later call on a warm model is
+      // fast; this long timeout only matters for the first one.
+      return (await http.post<Vector>(`${db(projectId)}/vectors/upsert`, body, { timeout: 90000 })).data
     },
     async searchVectors(
       projectId: string,
@@ -157,7 +167,8 @@ export function createApiClient(http: HttpLike = createHttp()) {
         // queries; show everything ranked by score and let people judge.
         threshold: opts.threshold ?? 0,
       }
-      return (await http.post<VectorSearchResult[]>(`${db(projectId)}/vectors/search`, body)).data
+      // Same cold-start embedding cost as upsertVector above.
+      return (await http.post<VectorSearchResult[]>(`${db(projectId)}/vectors/search`, body, { timeout: 90000 })).data
     },
     async deleteVector(projectId: string, vectorId: string): Promise<void> {
       await http.delete(`${db(projectId)}/vectors/${enc(vectorId)}`)

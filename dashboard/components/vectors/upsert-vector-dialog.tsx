@@ -84,6 +84,21 @@ export function UpsertVectorDialog({
     },
   })
 
+  // The very first vector upsert in a lite-mode session lazily downloads
+  // the embedding model server-side (BAAI/bge-small-en-v1.5), which can
+  // take well over the usual sub-second response time -- surface that
+  // instead of leaving "Embedding…" looking stuck. Every later call in the
+  // same server process is fast.
+  const [isSlow, setIsSlow] = React.useState(false)
+  React.useEffect(() => {
+    if (!upsert.isPending) {
+      setIsSlow(false)
+      return
+    }
+    const t = setTimeout(() => setIsSlow(true), 4000)
+    return () => clearTimeout(t)
+  }, [upsert.isPending])
+
   const docError = touched && mode === 'guided' && !form.document.trim() ? 'Add the text you want to store.' : null
 
   const submit = (e: React.FormEvent) => {
@@ -195,6 +210,12 @@ export function UpsertVectorDialog({
                   aria-describedby={jsonError ? 'uv-json-error' : 'uv-json-hint'}
                 />
               </Field>
+            )}
+
+            {isSlow && (
+              <p className="text-sm text-muted-foreground">
+                First time embedding text downloads a small model — this can take a minute. It only happens once.
+              </p>
             )}
 
             {upsert.error && (

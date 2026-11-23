@@ -41,20 +41,24 @@ describe('ApiClient', () => {
     expect(http.post).toHaveBeenCalledWith('/v1/projects', { name: 'support-bot', description: 'x' })
   })
 
-  it('upserts a vector with the API body shape', async () => {
+  it('upserts a vector with the API body shape and a longer timeout for cold embedding loads', async () => {
     const body = { document: 'hi', namespace: 'faq', metadata: { a: 1 } }
     await createApiClient(http).upsertVector(P, body)
-    expect(http.post).toHaveBeenCalledWith(`${base}/vectors/upsert`, body)
+    expect(http.post).toHaveBeenCalledWith(`${base}/vectors/upsert`, body, { timeout: 90000 })
   })
 
-  it('searches vectors by namespace, not collection', async () => {
+  it('searches vectors by namespace, not collection, with a longer timeout for cold embedding loads', async () => {
     await createApiClient(http).searchVectors(P, { query: 'refund', namespace: 'faq', limit: 5 })
-    expect(http.post).toHaveBeenCalledWith(`${base}/vectors/search`, {
-      query: 'refund',
-      namespace: 'faq',
-      limit: 5,
-      threshold: 0,
-    })
+    expect(http.post).toHaveBeenCalledWith(
+      `${base}/vectors/search`,
+      {
+        query: 'refund',
+        namespace: 'faq',
+        limit: 5,
+        threshold: 0,
+      },
+      { timeout: 90000 }
+    )
   })
 
   it('lists vectors in a namespace', async () => {
