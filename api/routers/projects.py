@@ -89,7 +89,16 @@ async def create_project(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Project with name '{project.name}' already exists")
 
-    _is_sqlite = "sqlite" in str(db.bind.url)
+    # db.bind is normally an Engine (production: Session is bound to
+    # database_service's engine), but a test fixture that binds the
+    # Session directly to a Connection (for per-test transaction rollback)
+    # makes db.bind a Connection instead -- which has no .url of its own,
+    # only .engine.url. Handle both. Refs #50.
+    _bind = db.bind
+    _dialect_url = getattr(_bind, "url", None)
+    if _dialect_url is None and hasattr(_bind, "engine"):
+        _dialect_url = _bind.engine.url
+    _is_sqlite = "sqlite" in str(_dialect_url)
     if _is_sqlite:
         import uuid as _uuid
         project_id = str(_uuid.uuid4())
