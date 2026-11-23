@@ -238,19 +238,19 @@ async def search_vectors(
 @router.get("", response_model=List[VectorResponse])
 async def list_vectors(
     project_id: UUID,
-    namespace: str = "default",
+    namespace: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     current_user = Depends(get_current_user_flexible),
     db: Session = Depends(database_service.get_db)
 ):
     """
-    List vectors in a namespace with pagination
+    List vectors, optionally filtered to one namespace
 
     **Authentication:** Required
 
     **Query Parameters:**
-    - namespace: Vector namespace (default: "default")
+    - namespace: Vector namespace to filter by. Omit to list across all namespaces.
     - skip: Number to skip for pagination
     - limit: Max results (max 100)
 
