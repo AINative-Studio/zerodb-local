@@ -54,10 +54,14 @@ services:
 
   # S3-compatible object storage for files. minio/minio was removed from
   # Docker Hub by upstream on 2026-09-11 (OSS edition archived 2026-02-13).
-  # Using AINative-Studio/minio, built from source locally — no dependency
-  # on any now-dead upstream registry. See docs/zerodb-local/minio-fork-maintenance-plan.md.
+  # AINative maintains its own fork (AINative-Studio/minio, vendored here
+  # as a git submodule at vendor/minio) going forward and builds it from
+  # source locally -- no dependency on any now-dead upstream registry, and
+  # no dependency on a published image existing anywhere yet either.
   minio:
-    image: ainative-studio/minio:local
+    build:
+      context: ./vendor/minio
+      dockerfile: Dockerfile.ainative
     container_name: zerodb-minio
     command: server /data --console-address ":9001"
     env_file:
