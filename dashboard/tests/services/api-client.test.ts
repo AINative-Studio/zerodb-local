@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createApiClient, withApiKey, ApiRequestError, type HttpLike } from '@/services/api-client'
+import { createApiClient, withApiKey, ApiRequestError, toApiRequestError, type HttpLike } from '@/services/api-client'
 
 // The client takes its HTTP instance as a parameter, so tests never open a
 // socket (the old suite re-mocked axios.create after the singleton had
@@ -214,5 +214,42 @@ describe('ApiRequestError', () => {
     expect(e).toBeInstanceOf(Error)
     expect(e.status).toBe(401)
     expect(e.isAuthError).toBe(true)
+  })
+
+  it('lets an explicit authOverride win over the status-based default', () => {
+    // Refs #80: a 401/403 that is not evidence the local API needs a key
+    // (e.g. a cloud-status check) needs to say so explicitly.
+    expect(new ApiRequestError('nope', 401, false).isAuthError).toBe(false)
+    expect(new ApiRequestError('nope', 200, true).isAuthError).toBe(true)
+  })
+})
+
+describe('toApiRequestError', () => {
+  it('treats a 401/403 as needing a local API key by default', () => {
+    const e = toApiRequestError({ status: 401 })
+    expect(e.isAuthError).toBe(true)
+    expect(e.message).toContain('needs an API key')
+  })
+
+  it('does NOT treat a 401 from cloud/status as needing a local API key', () => {
+    // Refs #80: GET .../cloud/status 401s by design whenever the project
+    // isn't connected to ZeroDB Cloud -- a normal state, not evidence the
+    // local server itself requires ZERODB_LOCAL_API_KEY. Before this fix,
+    // any project with no cloud connection showed a false "This server
+    // needs an API key" banner on every page, even with no local key set.
+    const e = toApiRequestError({ status: 401, url: '/v1/projects/p1/cloud/status' })
+    expect(e.isAuthError).toBe(false)
+    expect(e.status).toBe(401)
+  })
+
+  it('still treats a 401 from a non-cloud-status endpoint as needing a key', () => {
+    const e = toApiRequestError({ status: 401, url: '/v1/projects/p1/database/vectors' })
+    expect(e.isAuthError).toBe(true)
+  })
+
+  it('passes through a plain detail message for non-auth errors', () => {
+    const e = toApiRequestError({ status: 500, detail: 'boom' })
+    expect(e.isAuthError).toBe(false)
+    expect(e.message).toBe('boom')
   })
 })

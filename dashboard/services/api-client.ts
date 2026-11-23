@@ -38,12 +38,22 @@ import { getApiKey } from '@/lib/api-key'
 /** An API failure that keeps the HTTP status (401 -> show the sign-in hint). */
 export class ApiRequestError extends Error {
   status?: number
-  constructor(message: string, status?: number) {
+  /**
+   * Explicit override for isAuthError. Needed for a 401/403 that is NOT
+   * evidence the local API requires ZERODB_LOCAL_API_KEY -- e.g.
+   * GET .../cloud/status returning 401 just because this project isn't
+   * connected to ZeroDB Cloud, a normal state distinct from the local
+   * server's own auth gate.
+   */
+  private authOverride?: boolean
+  constructor(message: string, status?: number, authOverride?: boolean) {
     super(message)
     this.name = 'ApiRequestError'
     this.status = status
+    this.authOverride = authOverride
   }
   get isAuthError(): boolean {
+    if (this.authOverride !== undefined) return this.authOverride
     return this.status === 401 || this.status === 403
   }
 }
@@ -72,6 +82,32 @@ export function defaultBaseURL(): string {
     : process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 }
 
+/**
+ * Maps a failed axios response to the ApiRequestError the rest of the app
+ * sees. Pulled out of the axios interceptor so it's directly unit-testable
+ * without standing up a real axios instance.
+ *
+ * GET .../cloud/status 401s by design whenever this project isn't connected
+ * to ZeroDB Cloud -- a normal, expected state the Sync and Settings pages
+ * already render their own "Not connected" UI for, not evidence the
+ * *local* API itself needs ZERODB_LOCAL_API_KEY. Routing it through the
+ * generic isAuthError path put a false "This server needs an API key"
+ * banner on every page for any project with no cloud connection, even
+ * with no local key configured at all.
+ */
+export function toApiRequestError(response: { status: number; url?: string; detail?: unknown }): ApiRequestError {
+  const { status, detail } = response
+  const isCloudStatusCheck = (response.url ?? '').includes('/cloud/status')
+  if ((status === 401 || status === 403) && !isCloudStatusCheck) {
+    return new ApiRequestError('This server needs an API key. Add one in Settings › Connection.', status)
+  }
+  return new ApiRequestError(
+    typeof detail === 'string' ? detail : `API request failed (${status})`,
+    status,
+    isCloudStatusCheck ? false : undefined
+  )
+}
+
 function createHttp(): HttpLike {
   const instance = axios.create({
     baseURL: defaultBaseURL(),
@@ -84,14 +120,7 @@ function createHttp(): HttpLike {
     (error: AxiosError<ApiError>) => {
       if (error.response) {
         const { status, data } = error.response
-        const detail = data?.detail
-        if (status === 401 || status === 403) {
-          throw new ApiRequestError(
-            'This server needs an API key. Add one in Settings › Connection.',
-            status
-          )
-        }
-        throw new ApiRequestError(typeof detail === 'string' ? detail : `API request failed (${status})`, status)
+        throw toApiRequestError({ status, url: error.config?.url, detail: data?.detail })
       } else if (error.request) {
         throw new ApiRequestError('No response from the ZeroDB Local API. Is it running?')
       } else {
