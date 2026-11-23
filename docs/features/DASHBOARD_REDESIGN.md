@@ -112,8 +112,8 @@ The design canvas was drawn before checking the request models. The code follows
 ## Not verified / left to do locally
 
 1. **End-to-end against a real lite-mode API.** Not run here. Lite-mode CRUD for tables, vectors, files and events is blocked server-side by #47 (Postgres-only SQL). Once #47 lands: start the API in lite mode, `npm run dev`, and walk Projects → Vectors → Tables → Files → Events creating one of each.
-2. **Vector IDs containing `/`.** Delete calls `DELETE .../vectors/{vector_id}`, and the router matches on `vector_id` (checked). But an ID like `faq/refund-policy` is decoded to a real slash before routing, so it won't reach that route. Either declare the param as `{vector_id:path}` in `api/routers/vectors.py` (same for `GET /{vector_id}`), or have the Upsert form reject `/` in custom IDs.
-3. **Large uploads.** Each file is base64-encoded in the browser and posted in one JSON body. Check what the API accepts and add a size guard with a clear message.
+2. ~~**Vector IDs containing `/`.**~~ Fixed in 7895271 (`{vector_id:path}` in `api/routers/vectors.py`).
+3. ~~**Large uploads.**~~ Fixed in 3915a83: client-side 10 MB guard with a clear error (`MAX_UPLOAD_BYTES` in `dashboard/lib/files.ts`). The API itself still has no limit.
 4. **Live events.** The feed polls every 3s. `POST /events/subscribe` exists; switch to it if there's an SSE/WebSocket channel to read from.
 5. **Lite-mode sync tables.** `sync_state` table and `sync_history.sync_id` column are missing on a fresh lite DB (see above).
 6. **Sync against a real cloud account.** The Sync and Memory pages are built to the API's response models and tested with mocks; run a real push/pull once a project is connected.
