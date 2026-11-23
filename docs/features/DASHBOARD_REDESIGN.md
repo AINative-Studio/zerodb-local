@@ -22,12 +22,39 @@ Screenshots of the built pages (light, dark, phone, dialogs) are in [`docs/desig
 | `/projects` | Search, cards with usage counts, **New project** dialog (with "Show API request"), delete with in-page confirm |
 | `/vectors` | List by namespace, semantic search (scored), delete, **Upsert vector** dialog: Guided (text, namespace, ID, tags→metadata) / Advanced JSON |
 | `/tables` | Table list, row viewer typed from the schema, **Create table** dialog: Column builder (plain-language types, required, enum options) / JSON schema, **Add row** dialog with typed inputs, delete table |
+| `/memory` | Agent memory by session (conversation view, roles, token estimate), semantic search across memory, agent filter, **Add memory** dialog (Guided / Advanced JSON, pre-fills the open session), delete session |
 | `/files` | Drag-and-drop or browse upload (multi-file, sequential), list, download, delete |
 | `/events` | Feed with family filter chips (`vector.*`, `table.*`…), detail panel with JSON, Live (3s polling) / Paused, **Publish event** dialog |
+| `/sync` | Pending changes, last sync, cloud connection; **Preview sync** (push / pull / both, conflict rule) shows counts, schema changes, warnings and steps before **Run sync**; conflicts with side-by-side versions and keep-local / keep-cloud; history |
 | `/logs` | Six stat cards replaced by one row of level toggles; service, time-range and line-count filters; search; live refresh; export; always-dark terminal surface |
-| `/settings` | Theme, real server values (API URL in use, dashboard origin, backend from `/health`), create-form defaults, cloud sync status + connect with API key |
+| `/settings` | Theme, real server values (API URL in use, dashboard origin, backend from `/health`), **Connection** (API key for servers with cloud sign-in), create-form defaults, cloud sync status + connect with API key |
 
 Shared: the selected project is app-wide (`ProjectProvider`) and shown as a picker in every project-scoped page header, so moving between pages keeps your place. `?new=1` on Projects/Vectors/Tables opens the create dialog (used by Overview and empty states).
+
+## Audit: pages, sign-in and setup (Nov 22, second pass)
+
+Every API router was checked against the dashboard. Result:
+
+| API area | Before | Now |
+|---|---|---|
+| Projects, vectors, tables, files, events, logs | built in the first pass | — |
+| Memory (`/database/memory/*`) | no page; client called a route that doesn't exist | **Memory page** |
+| Sync: plan / execute / status, conflicts, history | no page | **Sync page** |
+| Sync internals: change log, schema diff, export bundles, pull preview/apply, rollback, sync state | no page | Left to the CLI on purpose; the Sync page covers the user-facing flow through the orchestrator |
+| `raymond` router | — | Client-specific, not dashboard material |
+
+**Sign-in.** There are no user accounts, login routes or passwords in the API. Lite mode (`ZERODB_AUTH_MODE` defaults to `local`) treats every request as one built-in user. Full mode defaults to `cloud`, which needs a ZeroDB API key on every request; before this pass the dashboard sent none, so **every dashboard request failed with 401 in full mode** unless `CLOUD_API_KEY` was set on the server. Fixed: Settings › Connection stores a key in the browser and the client sends it as a Bearer token; any 401/403 shows a banner on every page pointing there.
+
+**Setup gaps fixed in this pass:**
+- `dashboard/Dockerfile` copies `public/`, which didn't exist, so the dashboard image build failed. Added `public/` (brand mark) and an app icon. *Not built here (no Docker daemon in this environment); run `docker compose build dashboard`.*
+- Compose passed `VITE_API_URL` to a Next.js app that reads `NEXT_PUBLIC_API_URL`, and as a runtime env var although Next bakes it in at build. Now a build arg (+ `API_INTERNAL_URL` at runtime).
+- README referenced `.env.local.example`, which didn't exist. Added at the repo root with every variable Compose reads, documented.
+- README rewritten for first-time setup: how to run the dashboard in lite mode (it isn't in the pip package), ports table, sign-in and the built-in local user, default service credentials (Postgres `zerodb` / `localpass`, MinIO `minioadmin` / `minioadmin`), the security note below, a page guide, troubleshooting. Its vector upsert/search curl examples used fields the API doesn't accept (`vector_embedding`, `query_vector`); fixed. The pip-installed `zerodb serve` only has `--host/--port/--reload`; README now uses `ZERODB_DATA_DIR` / `CLOUD_API_KEY`, which work either way.
+
+**Security recommendation (not changed, needs a decision):** lite mode has no sign-in *and* `zerodb serve` binds `0.0.0.0` by default (asserted in `cli/tests/test_serve_command.py`), so anyone on the same network can read and delete everything. Options, in order of effort:
+1. Default `--host` to `127.0.0.1` (one-line change + test update; Docker is unaffected since the container sets its own host).
+2. Add an optional local access key (`ZERODB_LOCAL_API_KEY`): when set, lite mode requires it as a Bearer token. The dashboard already sends one from Settings › Connection, so no UI work. A FastAPI dependency + tests.
+3. Real local users with login. Most work, and a shipped default password would be no better than option 1; not recommended for a single-developer tool.
 
 ## Where things live
 
@@ -42,13 +69,16 @@ dashboard/
   lib/events.ts                 family grouping/filtering, data parsing, summaries
   lib/files.ts                  base64 helpers, download, content-type names
   lib/preferences.ts            per-browser create-form defaults
+  lib/memory-form.ts            guided memory form <-> store body
+  lib/api-key.ts                optional API key for cloud sign-in servers
   services/api-client.ts        createApiClient(http) -- injectable, typed to the real API
   types/index.ts                response types matching api/routers/*.py
   components/providers/         theme-provider, project-provider, query-provider
   components/layout/            sidebar, page-header (+ project picker), mode-badge, theme-toggle, states
   components/ui/                button/badge/input/card (rebranded) + dialog, form-controls
                                 (Select, Textarea, Field), segmented, confirm-dialog, copy-field
-  components/{projects,vectors,tables,events}/   the create dialogs
+  components/{projects,vectors,tables,memory,events}/   the create dialogs
+  components/layout/auth-notice.tsx               401 banner
 ```
 
 Conventions kept from the existing kit: Radix primitive where one exists, `cva` variants, `forwardRef`, Tailwind classes that read CSS variables. No new UI framework. New dependencies: `@fontsource-variable/{inter,space-grotesk,jetbrains-mono}` (fonts are bundled so the dashboard works offline; `next/font/google` needs network at build) and `@testing-library/user-event` (dev).
@@ -66,10 +96,10 @@ The design canvas was drawn before checking the request models. The code follows
 
 ## Verified
 
-- `npm test`: **118 passing** (14 files): pure logic, API client (now with an injected HTTP instance; the old suite made real requests to localhost:8000), theme provider, and page-level tests that drive each create flow through the UI.
+- `npm test`: **144 passing** (16 files): pure logic, API client (now with an injected HTTP instance; the old suite made real requests to localhost:8000), theme provider, and page-level tests that drive each create flow through the UI.
 - `npx tsc --noEmit`, `npm run lint`: clean.
-- `npm run build`: all 8 routes prerender.
-- Production build loaded in Chromium against fixture API data, every page in light, dark and 390px phone width: **no console errors, no horizontal page scroll**. That pass caught and fixed a hydration mismatch (browser-only values rendered on the server) and table "Actions" labels escaping their scroll box on phones.
+- `npm run build`: all 10 routes prerender.
+- Production build loaded in Chromium against fixture API data, every page in light, dark and 390px phone width (plus the 401 banner): **no console errors, no horizontal page scroll**. That pass caught and fixed a hydration mismatch (browser-only values rendered on the server) and table "Actions" labels escaping their scroll box on phones.
 - Also fixed two tests already failing on `main`: a timezone-dependent `formatDate` test and the network-calling API client suite.
 
 ## Not verified / left to do locally
@@ -78,9 +108,10 @@ The design canvas was drawn before checking the request models. The code follows
 2. **Vector IDs containing `/`.** Delete calls `DELETE .../vectors/{vector_id}`, and the router matches on `vector_id` (checked). But an ID like `faq/refund-policy` is decoded to a real slash before routing, so it won't reach that route. Either declare the param as `{vector_id:path}` in `api/routers/vectors.py` (same for `GET /{vector_id}`), or have the Upsert form reject `/` in custom IDs.
 3. **Large uploads.** Each file is base64-encoded in the browser and posted in one JSON body. Check what the API accepts and add a size guard with a clear message.
 4. **Live events.** The feed polls every 3s. `POST /events/subscribe` exists; switch to it if there's an SSE/WebSocket channel to read from.
-5. **Memory.** The API stores agent memory (`usage.memory`, `/database/memory`) but there's still no Memory page. Decision #1 says nothing ships as a placeholder; a Memory page is the one gap. Needs a product call.
-6. **Next.js 14.2.15 security advisories** (33 npm audit findings) remain. Framework bump is a separate, engineering-owned task.
-7. `next start` warns because `next.config.mjs` sets `output: 'standalone'`; for local runs use `node .next/standalone/server.js` (Dockerfile already does).
+5. **Lite-mode security default.** See the recommendation above; needs a call between options 1 and 2.
+6. **Sync against a real cloud account.** The Sync and Memory pages are built to the API's response models and tested with mocks; run a real push/pull once a project is connected.
+7. **Next.js 14.2.15 security advisories** (33 npm audit findings) remain. Framework bump is a separate, engineering-owned task.
+8. `next start` warns because `next.config.mjs` sets `output: 'standalone'`; for local runs use `node .next/standalone/server.js` (Dockerfile already does).
 
 ## Run it
 
