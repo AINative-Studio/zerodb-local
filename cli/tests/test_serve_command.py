@@ -108,11 +108,19 @@ class TestServeDefaults:
 
     @patch("commands.serve.uvicorn")
     def test_serve_calls_uvicorn_with_defaults(self, mock_uvicorn, runner, serve_app, tmp_data_dir):
-        """Given default args, uvicorn.run should be called with port 8000"""
+        """Given default args, uvicorn.run should be called with port 8000.
+
+        Refs #75: the real FastAPI app lives in api/main.py (package "api",
+        not "app" -- no "app" package exists anywhere in this repo or the
+        installed distribution), so the module string must be "main:app"
+        (matching tests/test_lite_mode_crud.py's lite_server fixture, which
+        runs the same server by cwd-ing into api/ first -- api/main.py's own
+        sibling-relative imports, e.g. "from health import ...", require it).
+        """
         result = runner.invoke(serve_app, ["--data-dir", str(tmp_data_dir)])
 
         mock_uvicorn.run.assert_called_once_with(
-            "app.main:app",
+            "main:app",
             host="127.0.0.1",
             port=8000,
             reload=False,
@@ -314,11 +322,12 @@ class TestServeUvicornIntegration:
 
     @patch("commands.serve.uvicorn")
     def test_uvicorn_receives_app_string(self, mock_uvicorn, runner, serve_app, tmp_data_dir):
-        """Given serve runs, uvicorn should load app.main:app"""
+        """Given serve runs, uvicorn should load main:app from the api/
+        working directory -- see #75: there is no "app" package."""
         result = runner.invoke(serve_app, ["--data-dir", str(tmp_data_dir)])
 
         args, kwargs = mock_uvicorn.run.call_args
-        assert args[0] == "app.main:app"
+        assert args[0] == "main:app"
 
     @patch("commands.serve.uvicorn")
     def test_uvicorn_receives_custom_host(self, mock_uvicorn, runner, serve_app, tmp_data_dir):
@@ -465,3 +474,85 @@ class TestExposureWarning:
         from commands.serve import exposure_warning
 
         assert exposure_warning("0.0.0.0", key_set=True) is None
+
+
+# ===== Real server startup (no mocks) =====
+
+class TestServeStartsRealServer:
+    """Refs #75: `zerodb serve` crashed immediately with
+    `ModuleNotFoundError: No module named 'app'` for every user following
+    the README's documented quickstart -- uvicorn.run("app.main:app", ...)
+    pointed at a package that doesn't exist anywhere in this repo or the
+    installed distribution. The mocked uvicorn tests above caught the
+    *call arguments* regressing, but only a real subprocess that actually
+    imports and serves the app proves the command itself works end to end.
+    """
+
+    def test_serve_command_actually_starts_and_serves_health(self, tmp_path):
+        import shutil
+        import socket
+        import subprocess
+        import sys
+        import time
+
+        import httpx
+
+        def _free_port() -> int:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                return s.getsockname()[1]
+
+        # Invoke the real installed `zerodb` console script (the exact
+        # command the README tells users to run), not `python -m
+        # zerodb_local.cli`: that module defines the Typer `app` but has no
+        # `if __name__ == "__main__": app()` guard, so running it as `-m`
+        # merely imports it and exits 0 without invoking anything.
+        zerodb_bin = Path(sys.executable).parent / "zerodb"
+        if not zerodb_bin.exists():
+            zerodb_bin = shutil.which("zerodb")
+            if not zerodb_bin:
+                pytest.skip("zerodb console script not found on PATH")
+
+        port = _free_port()
+        data_dir = tmp_path / "zerodb_serve_data"
+        cli_dir = Path(__file__).parent.parent
+
+        env = dict(os.environ)
+        env.pop("DATABASE_URL", None)
+
+        proc = subprocess.Popen(
+            [
+                str(zerodb_bin), "serve",
+                "--port", str(port),
+                "--data-dir", str(data_dir),
+            ],
+            cwd=str(cli_dir.parent),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        try:
+            for _ in range(50):
+                if proc.poll() is not None:
+                    output = proc.stdout.read()
+                    pytest.fail(
+                        f"zerodb serve exited early with code "
+                        f"{proc.returncode}:\n{output}"
+                    )
+                try:
+                    resp = httpx.get(f"{base_url}/health", timeout=1)
+                    if resp.status_code == 200:
+                        assert resp.json()["backend"] == "lite"
+                        return
+                except httpx.ConnectError:
+                    time.sleep(0.2)
+            pytest.fail("zerodb serve did not start in time")
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
