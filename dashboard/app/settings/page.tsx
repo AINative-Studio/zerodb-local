@@ -137,7 +137,7 @@ function Connection() {
     <Section
       id="connection"
       title="Connection"
-      description="Lite mode (zerodb serve) needs no sign-in. Full mode (Docker) defaults to cloud sign-in: paste your ZeroDB API key here and the dashboard sends it with every request. It stays in this browser."
+      description="By default ZeroDB Local needs no sign-in and only accepts connections from this machine. If the server has a local access key (ZERODB_LOCAL_API_KEY) or cloud sign-in (ZERODB_AUTH_MODE=cloud), paste the key here. The dashboard sends it with every request and keeps it in this browser."
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">API key</span>
@@ -155,7 +155,7 @@ function Connection() {
         }}
         className="flex flex-wrap items-end gap-2.5"
       >
-        <Field label={saved ? 'Replace API key' : 'ZeroDB API key'} htmlFor="api-key" className="min-w-[260px] flex-1">
+        <Field label={saved ? 'Replace key' : 'Local access key or ZeroDB API key'} htmlFor="api-key" className="min-w-[260px] flex-1">
           <Input id="api-key" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} className="font-mono" />
         </Field>
         <Button type="submit" variant="outline" disabled={!key.trim()}>Save key</Button>

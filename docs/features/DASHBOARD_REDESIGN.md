@@ -43,18 +43,25 @@ Every API router was checked against the dashboard. Result:
 | Sync internals: change log, schema diff, export bundles, pull preview/apply, rollback, sync state | no page | Left to the CLI on purpose; the Sync page covers the user-facing flow through the orchestrator |
 | `raymond` router | — | Client-specific, not dashboard material |
 
-**Sign-in.** There are no user accounts, login routes or passwords in the API. Lite mode (`ZERODB_AUTH_MODE` defaults to `local`) treats every request as one built-in user. Full mode defaults to `cloud`, which needs a ZeroDB API key on every request; before this pass the dashboard sent none, so **every dashboard request failed with 401 in full mode** unless `CLOUD_API_KEY` was set on the server. Fixed: Settings › Connection stores a key in the browser and the client sends it as a Bearer token; any 401/403 shows a banner on every page pointing there.
+**Sign-in.** There are no user accounts, login routes or passwords in the API. Before this branch, full mode defaulted to cloud sign-in and the dashboard sent no credentials, so **every dashboard request failed with 401 in Docker** unless `CLOUD_API_KEY` was set on the server. Now both modes default to no login (see the security model below), and when a server does want a key (local access key or cloud mode), Settings › Connection stores it and the client sends it as a Bearer token; any 401/403 shows a banner on every page pointing there.
 
 **Setup gaps fixed in this pass:**
 - `dashboard/Dockerfile` copies `public/`, which didn't exist, so the dashboard image build failed. Added `public/` (brand mark) and an app icon. *Not built here (no Docker daemon in this environment); run `docker compose build dashboard`.*
 - Compose passed `VITE_API_URL` to a Next.js app that reads `NEXT_PUBLIC_API_URL`, and as a runtime env var although Next bakes it in at build. Now a build arg (+ `API_INTERNAL_URL` at runtime).
-- README referenced `.env.local.example`, which didn't exist. Added at the repo root with every variable Compose reads, documented.
+- README referenced `.env.local.example`, which didn't exist. Added it (container settings), plus `.env.example` for ports and bind address: Compose only reads those from `.env`, so they never worked from `.env.local`.
 - README rewritten for first-time setup: how to run the dashboard in lite mode (it isn't in the pip package), ports table, sign-in and the built-in local user, default service credentials (Postgres `zerodb` / `localpass`, MinIO `minioadmin` / `minioadmin`), the security note below, a page guide, troubleshooting. Its vector upsert/search curl examples used fields the API doesn't accept (`vector_embedding`, `query_vector`); fixed. The pip-installed `zerodb serve` only has `--host/--port/--reload`; README now uses `ZERODB_DATA_DIR` / `CLOUD_API_KEY`, which work either way.
 
-**Security recommendation (not changed, needs a decision):** lite mode has no sign-in *and* `zerodb serve` binds `0.0.0.0` by default (asserted in `cli/tests/test_serve_command.py`), so anyone on the same network can read and delete everything. Options, in order of effort:
-1. Default `--host` to `127.0.0.1` (one-line change + test update; Docker is unaffected since the container sets its own host).
-2. Add an optional local access key (`ZERODB_LOCAL_API_KEY`): when set, lite mode requires it as a Bearer token. The dashboard already sends one from Settings › Connection, so no UI work. A FastAPI dependency + tests.
-3. Real local users with login. Most work, and a shipped default password would be no better than option 1; not recommended for a single-developer tool.
+**Security model (decided Nov 22, implemented on this branch).** Open-core split: local is single-player and frictionless; sign-in, users and teams are ZeroDB Cloud's job. So:
+
+1. **This machine only by default.** `zerodb serve` (both CLI entry points) and `python api/main.py` default to `127.0.0.1`; Docker publishes every port on `${ZERODB_BIND_ADDRESS:-127.0.0.1}`. `zerodb serve --host 0.0.0.0` without a key prints a warning. Tests updated: `cli/tests/test_serve_command.py` (+ exposure warning tests).
+2. **Optional local access key.** `ZERODB_LOCAL_API_KEY`: when set, local mode requires `Authorization: Bearer <key>` (constant-time compare, key never echoed). Dashboard sends it from Settings › Connection. Tests: `api/tests/test_local_access_key.py`.
+3. **No login by default in Docker either.** `ZERODB_AUTH_MODE` now defaults to `local` in both backends (was `cloud` for full mode, which made the open-source Docker setup unusable without a ZeroDB account). `cloud` stays available as an opt-in.
+4. **Every router behind the sign-in check.** Seven routers had no auth at all (cloud sync, export, logs, pull sync, sync history, sync orchestrator, raymond), so neither cloud mode nor a key protected them. `api/main.py` now adds the dependency on every `include_router`; `/health` and `/` stay open. Tests: `api/tests/test_router_auth_coverage.py`.
+5. **No local user accounts or default password**, on purpose: a well-known default password protects nothing, and accounts/teams are the cloud's upgrade path.
+
+Also fixed: `api/tests/test_qdrant_startup.py` was already failing on `main` (it expected `6333:6333`, the file has had a port variable for a while).
+
+**Found while testing, not fixed (API bugs in lite mode):** `GET /sync/status` fails with `no such table: sync_state` and `GET /sync/history` with `no such column: sync_history.sync_id` on a fresh lite database. The Sync page shows those errors until the lite migrations create these tables. Same family as #47.
 
 ## Where things live
 
@@ -108,7 +115,7 @@ The design canvas was drawn before checking the request models. The code follows
 2. **Vector IDs containing `/`.** Delete calls `DELETE .../vectors/{vector_id}`, and the router matches on `vector_id` (checked). But an ID like `faq/refund-policy` is decoded to a real slash before routing, so it won't reach that route. Either declare the param as `{vector_id:path}` in `api/routers/vectors.py` (same for `GET /{vector_id}`), or have the Upsert form reject `/` in custom IDs.
 3. **Large uploads.** Each file is base64-encoded in the browser and posted in one JSON body. Check what the API accepts and add a size guard with a clear message.
 4. **Live events.** The feed polls every 3s. `POST /events/subscribe` exists; switch to it if there's an SSE/WebSocket channel to read from.
-5. **Lite-mode security default.** See the recommendation above; needs a call between options 1 and 2.
+5. **Lite-mode sync tables.** `sync_state` table and `sync_history.sync_id` column are missing on a fresh lite DB (see above).
 6. **Sync against a real cloud account.** The Sync and Memory pages are built to the API's response models and tested with mocks; run a real push/pull once a project is connected.
 7. **Next.js 14.2.15 security advisories** (33 npm audit findings) remain. Framework bump is a separate, engineering-owned task.
 8. `next start` warns because `next.config.mjs` sets `output: 'standalone'`; for local runs use `node .next/standalone/server.js` (Dockerfile already does).

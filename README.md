@@ -13,7 +13,8 @@ Two ways to run it:
 | API | http://localhost:8000 | http://localhost:8000 |
 | API docs | http://localhost:8000/docs | http://localhost:8000/docs |
 | Dashboard | http://localhost:3000 (run it yourself, below) | http://localhost:3000 (starts with Compose) |
-| Sign-in | **None.** Every request acts as a built-in local user | **ZeroDB API key** by default (`ZERODB_AUTH_MODE=cloud`) |
+| Sign-in | None by default (optional access key) | None by default (optional access key) |
+| Reachable from | This machine only, by default | This machine only, by default |
 | Data | `~/.zerodb/data/` | Docker volumes |
 
 ---
@@ -62,7 +63,7 @@ From there you can do everything without the CLI or curl: create a project, add 
 
 ```bash
 zerodb serve --port 9000                         # different API port
-zerodb serve --host 127.0.0.1                    # only reachable from this machine
+zerodb serve --host 0.0.0.0                      # reachable from your network (set a key, below)
 ZERODB_DATA_DIR=/my/data zerodb serve            # different data folder
 CLOUD_API_KEY=sk_... zerodb serve                # enable cloud sync
 ```
@@ -75,7 +76,9 @@ When running from a source checkout, `zerodb serve` also accepts `--data-dir` an
 
 ## Sign-in, users and default passwords
 
-**Lite mode has no login.** There's no user account to create and no password. Every request is treated as one built-in local user:
+ZeroDB Local is built for one developer on their own machine, so **there's no login, no user account to create and no password**, in either mode. Instead it's safe by default because **it only accepts connections from this machine** (`127.0.0.1`). Teams, sign-in and sharing are what [ZeroDB Cloud](https://zerodb.ainative.studio) is for.
+
+Every request acts as one built-in local user:
 
 | Setting | Default | Override with |
 |---|---|---|
@@ -83,16 +86,32 @@ When running from a source checkout, `zerodb serve` also accepts `--data-dir` an
 | Email | `dev@localhost` | `ZERODB_USER_EMAIL` |
 | Username | `local-developer` | `ZERODB_USERNAME` |
 
-**Full mode (Docker) requires a ZeroDB API key by default** (`ZERODB_AUTH_MODE=cloud`). Either set `CLOUD_API_KEY` in `.env.local`, or open the dashboard and paste your key in **Settings › Connection**. The dashboard keeps it in your browser and sends it as `Authorization: Bearer <key>`; if the API turns a request down, the dashboard shows a banner pointing you there. Set `ZERODB_AUTH_MODE=local` to switch full mode to no-login like lite mode. Get a key at https://www.ainative.studio/dashboard/api-keys.
+### Opening it up to other machines
 
-**Default service credentials (full mode only).** These are for the containers, not for you to log in to the dashboard. Change them in `.env.local` before exposing anything beyond your machine:
+If you want to reach ZeroDB Local from another machine (a teammate, a VM, a home server), set a **local access key** at the same time. Then every request must send it as `Authorization: Bearer <key>`; in the dashboard, paste it once in **Settings › Connection**.
+
+```bash
+# Lite mode
+ZERODB_LOCAL_API_KEY="$(openssl rand -hex 24)" zerodb serve --host 0.0.0.0
+
+# Full mode: in .env           ZERODB_BIND_ADDRESS=0.0.0.0
+#            in .env.local     ZERODB_LOCAL_API_KEY=<a long random string>
+```
+
+`zerodb serve` prints a warning if you listen on the network without a key. `/health` stays open so tools can check the server is up.
+
+To require ZeroDB Cloud API keys instead of one shared key, set `ZERODB_AUTH_MODE=cloud`.
+
+### Default service credentials (full mode only)
+
+These are for the Docker containers, not for logging in to the dashboard. Their ports are only published on `127.0.0.1`, but change them in `.env.local` before opening anything up:
 
 | Service | Username | Password |
 |---|---|---|
 | PostgreSQL (`localhost:5432`, db `zerodb_local`) | `zerodb` | `localpass` |
 | MinIO console (http://localhost:9001) | `minioadmin` | `minioadmin` |
 
-> **Security note.** In no-login mode, anyone who can reach the API's port can read, change and delete everything. `zerodb serve` listens on all network interfaces (`0.0.0.0`) by default, so on shared Wi-Fi other people on the network can reach it. Use `zerodb serve --host 127.0.0.1` unless you mean to share it, and don't forward these ports to the internet.
+> **Don't forward these ports to the internet.** Even with an access key, ZeroDB Local isn't hardened as a public server; use ZeroDB Cloud for that.
 
 ---
 
@@ -100,13 +119,15 @@ When running from a source checkout, `zerodb serve` also accepts `--data-dir` an
 
 | Port | What | Mode | Change with |
 |---|---|---|---|
-| **8000** | ZeroDB API (+ `/docs`, `/health`) | both | `zerodb serve --port`, or `ZERODB_API_PORT` |
-| **3000** | Dashboard | both | `npm run dev -- -p <port>`, or `ZERODB_DASHBOARD_PORT` |
+| **8000** | ZeroDB API (+ `/docs`, `/health`) | both | `zerodb serve --port`, or `ZERODB_API_PORT` in `.env` |
+| **3000** | Dashboard | both | `npm run dev -- -p <port>`, or `ZERODB_DASHBOARD_PORT` in `.env` |
 | 8001 | Embeddings service | full | `ZERODB_EMBEDDINGS_PORT` |
 | 5432 | PostgreSQL | full | `ZERODB_POSTGRES_PORT` |
 | 6333 / 6334 | Qdrant REST / gRPC | full | `ZERODB_QDRANT_REST_PORT` / `ZERODB_QDRANT_GRPC_PORT` |
 | 9000 / 9001 | MinIO API / console | full | `ZERODB_MINIO_API_PORT` / `ZERODB_MINIO_CONSOLE_PORT` |
 | 9092 / 8082 / 9644 | RedPanda Kafka / proxy / admin | full | `ZERODB_REDPANDA_*_PORT` |
+
+In full mode, ports and `ZERODB_BIND_ADDRESS` go in a `.env` file next to `docker-compose.yml` (copy `.env.example`); Docker Compose doesn't read them from `.env.local`. Every port is published on `127.0.0.1` unless you set `ZERODB_BIND_ADDRESS=0.0.0.0`.
 
 If you move the dashboard to another port, add it to the API's `CORS_ORIGINS` (comma-separated).
 
@@ -159,13 +180,14 @@ For production-like environments with PostgreSQL, Qdrant, MinIO, and RedPanda.
    cd zerodb-local
    ```
 
-2. **Copy environment template**:
+2. **Copy the environment templates** (both optional; every value has a default):
    ```bash
-   cp .env.local.example .env.local
+   cp .env.example .env               # ports and bind address (read by Compose)
+   cp .env.local.example .env.local   # service settings (read by the containers)
    ```
 
 3. **Edit `.env.local`** (optional):
-   - Set `CLOUD_API_KEY` (needed for the default cloud sign-in and for cloud sync), or set `ZERODB_AUTH_MODE=local` for no login
+   - Set `CLOUD_API_KEY` if you want cloud sync
    - Change `POSTGRES_PASSWORD` and the MinIO keys from their defaults
    - Adjust `EMBEDDINGS_MODEL` based on your needs
 
@@ -189,8 +211,7 @@ For production-like environments with PostgreSQL, Qdrant, MinIO, and RedPanda.
    - `zerodb-dashboard` (Web UI)
 
 6. **Access the dashboard**:
-   - Open http://localhost:3000 in your browser
-   - If you kept cloud sign-in, paste your API key in **Settings › Connection**
+   - Open http://localhost:3000 in your browser. No login needed.
 
 7. **Check API health**:
    ```bash
@@ -293,7 +314,7 @@ curl -X POST http://localhost:8000/v1/projects \
   }'
 ```
 
-In full mode with cloud sign-in, add `-H "Authorization: Bearer $CLOUD_API_KEY"` to each request. Lite mode needs no header.
+No auth header is needed by default. If the server has a local access key, add `-H "Authorization: Bearer $ZERODB_LOCAL_API_KEY"` to each request.
 
 ### Upsert a Vector
 The API embeds `document` for you (free, local model). Reusing a `vector_id` replaces that vector.
@@ -390,7 +411,7 @@ docker-compose up -d
 ### Hot Reload API
 ```bash
 cd api
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Hot Reload Dashboard
@@ -427,7 +448,10 @@ docker-compose down -v && docker-compose up -d
 ```
 
 ### Dashboard shows "This server needs an API key"
-The API is in cloud sign-in mode (the full-mode default). Paste your ZeroDB API key in **Settings › Connection**, or set `ZERODB_AUTH_MODE=local` in `.env.local` and restart the API.
+The API has `ZERODB_LOCAL_API_KEY` set (or `ZERODB_AUTH_MODE=cloud`). Paste that key in **Settings › Connection**.
+
+### Can't reach ZeroDB Local from another machine
+That's the default: it only accepts connections from this machine. See [Opening it up to other machines](#opening-it-up-to-other-machines).
 
 ### Dashboard can't reach the API
 - Is the API running? `curl http://localhost:8000/health`
@@ -501,15 +525,18 @@ zerodb cloud pull
 ```
 
 ### Conflict Resolution
-Configure in `.env.local`:
+In the dashboard, choose the rule on the **Sync** page before previewing. For the CLI, configure in `.env.local`:
 ```
 CONFLICT_RESOLUTION=newest-wins  # local-wins, cloud-wins, newest-wins, manual
 ```
 
 ## Environment Variables Reference
 
-See `.env.local.example` for complete list. Key variables:
+See `.env.example` (ports, bind address) and `.env.local.example` (everything else) for the complete list. Key variables:
 
+- `ZERODB_LOCAL_API_KEY` - Optional shared key; when set, every request needs `Authorization: Bearer <key>`
+- `ZERODB_AUTH_MODE` - `local` (default, no login) or `cloud` (ZeroDB Cloud API keys)
+- `ZERODB_BIND_ADDRESS` - In `.env`: `127.0.0.1` (default, this machine only) or `0.0.0.0`
 - `POSTGRES_PASSWORD` - Database password (change in production!)
 - `CLOUD_API_KEY` - Your ZeroDB Cloud API key for sync
 - `EMBEDDINGS_MODEL` - Model to use (small/base/large)
