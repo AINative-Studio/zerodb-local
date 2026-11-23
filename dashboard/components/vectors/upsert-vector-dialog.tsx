@@ -49,14 +49,23 @@ export function UpsertVectorDialog({
   const [jsonError, setJsonError] = React.useState<string | null>(null)
   const [touched, setTouched] = React.useState(false)
 
+  // Resetting a controlled dialog's form state when it opens, keyed on
+  // the `open` prop itself: one of the documented, intended uses of this
+  // pattern
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes),
+  // not the derived-state anti-pattern the rule targets. Can't move to
+  // render-time derivation either: getDefaultNamespace()/getFormMode()
+  // read localStorage, an impure read render must not perform.
   React.useEffect(() => {
     if (!open) return
     const start = { ...EMPTY_VECTOR_FORM, namespace: getDefaultNamespace() }
+    /* eslint-disable react-hooks/set-state-in-effect */
     setForm(start)
     setMode(getFormMode())
     setJson(JSON.stringify(buildUpsertRequest(start), null, 2))
     setJsonError(null)
     setTouched(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open])
 
   const switchMode = (next: FormMode) => {
@@ -92,6 +101,13 @@ export function UpsertVectorDialog({
   const [isSlow, setIsSlow] = React.useState(false)
   React.useEffect(() => {
     if (!upsert.isPending) {
+      // The rule flags this synchronous setIsSlow(false) reset branch,
+      // but this effect as a whole exists specifically to synchronize
+      // with an external timer (setTimeout), the textbook correct use of
+      // an effect; resetting immediately when the pending mutation it's
+      // timing ends is part of that same synchronization, not a
+      // derived-state shortcut.
+      /* eslint-disable-next-line react-hooks/set-state-in-effect */
       setIsSlow(false)
       return
     }
