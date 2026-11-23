@@ -29,7 +29,10 @@ class TestEventsEndpoints:
         assert "id" in data
         assert data["event_type"] == sample_event_data["event_type"]
         assert data["event_data"] == sample_event_data["event_data"]
-        assert "created_at" in data
+        # EventResponse's timestamp field is "timestamp", not "created_at"
+        # (that convention is used by projects/tables, not events).
+        # Refs #50.
+        assert "timestamp" in data
 
     def test_create_event_missing_type(self, client: TestClient):
         """Test creating event without event_type fails"""
@@ -199,7 +202,9 @@ class TestEventsEndpoints:
 
     def test_event_with_correlation_id(self, client: TestClient, sample_event_data):
         """Test creating event with correlation_id for tracing"""
-        correlation_id = "trace-12345-xyz"
+        # events.correlation_id is a UUID column (schema.sql) -- must be a
+        # valid UUID string against a real Postgres. Refs #50.
+        correlation_id = "11111111-2222-3333-4444-555555555555"
         sample_event_data["correlation_id"] = correlation_id
 
         response = client.post(
@@ -258,7 +263,9 @@ class TestEventsEndpoints:
         )
 
         assert response.status_code == 400
-        assert "time_range must be" in response.json()["detail"]
+        # This app's error middleware returns {"error", "message",
+        # "request_id"}, not FastAPI's default {"detail"}. Refs #50.
+        assert "time_range must be" in response.json()["message"]
 
     def test_event_with_complex_data(self, client: TestClient):
         """Test creating event with complex nested event_data"""

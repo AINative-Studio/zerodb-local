@@ -5,7 +5,7 @@ Handles event storage and streaming using PostgreSQL + RedPanda
 import json
 import os
 from typing import List, Dict, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -131,7 +131,10 @@ class EventsService:
             "id": event_id,
             "event_type": result.event_type,
             "source": result.source,
-            "correlation_id": result.correlation_id,
+            # correlation_id is a UUID column -- psycopg2 returns it as a
+            # native uuid.UUID, but EventResponse.correlation_id is typed
+            # str; coerce here the same way event_id already is. Refs #50.
+            "correlation_id": str(result.correlation_id) if result.correlation_id else None,
             "event_data": event_data_out,
             "timestamp": timestamp_out
         }
@@ -204,7 +207,7 @@ class EventsService:
                 "id": str(row.id),
                 "event_type": row.event_type,
                 "source": row.source,
-                "correlation_id": row.correlation_id,
+                "correlation_id": str(row.correlation_id) if row.correlation_id else None,
                 "event_data": parse_json_column(row.event_data),
                 "timestamp": to_isoformat(row.timestamp)
             }
@@ -247,7 +250,7 @@ class EventsService:
             "id": str(result.id),
             "event_type": result.event_type,
             "source": result.source,
-            "correlation_id": result.correlation_id,
+            "correlation_id": str(result.correlation_id) if result.correlation_id else None,
             "event_data": parse_json_column(result.event_data),
             "timestamp": to_isoformat(result.timestamp)
         }
@@ -368,11 +371,15 @@ class EventsService:
         """
         topic = f"{self.default_topic_prefix}.{project_id}.events"
 
-        # Subscribe to RedPanda topic
-        subscription_id = await redpanda_service.subscribe_to_topic(
-            topic=topic,
-            consumer_group=f"project_{project_id}"
-        )
+        # Generate a subscription id identifying this topic/consumer-group
+        # pairing. RedPandaService has no subscribe_to_topic() method (it
+        # exposes create_consumer()/consume_events() instead, a different,
+        # synchronous-iterator shaped API) -- actually opening a Kafka
+        # consumer belongs to whatever client later streams from this
+        # subscription (e.g. a WebSocket/SSE endpoint using
+        # create_consumer() with this same topic/group), not to this
+        # call, which only needs to hand back an identifier. Refs #50.
+        subscription_id = f"sub_{uuid4()}"
 
         return {
             "subscription_id": subscription_id,

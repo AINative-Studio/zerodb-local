@@ -18,73 +18,12 @@ entity type, then calls the real sync/plan endpoint and asserts it reports a
 non-zero pending-changes count for that entity type.
 """
 import os
+import subprocess
+import sys
 import time
-import threading
 
 import pytest
 import httpx
-import uvicorn
-
-
-# Force lite mode for this module, with an isolated data dir per test run
-os.environ["ZERODB_BACKEND"] = "lite"
-os.environ["TESTING"] = "true"
-
-
-# Top-level module names (and their submodules, matched by prefix) that
-# main.py's import graph pulls in, directly or transitively: routers,
-# services, schemas, lite.*, plus main/database/health/middleware/auth
-# themselves. See _force_reimport_lite_stack()'s docstring for why every
-# one of these -- not just the handful with an obviously
-# ZERODB_DATA_DIR-derived constant -- must be dropped together.
-_APP_MODULE_PREFIXES = (
-    "main",
-    "database",
-    "health",
-    "auth",
-    "middleware",
-    "routers",
-    "services",
-    "schemas",
-    "lite",
-)
-
-
-def _force_reimport_lite_stack():
-    """
-    Drop every cached module in main.py's import graph before (re)setting
-    ZERODB_DATA_DIR and importing `main`, so this test module gets a
-    genuinely fresh app wired end-to-end to the directory it's about to set
-    -- regardless of what any earlier test file already imported.
-
-    lite.config.DATA_DIR, lite.services.database_service_lite's
-    DEFAULT_DATA_DIR/DEFAULT_DB_PATH, and api.database's engine/DATABASE_URL
-    are plain module-level constants computed once, at each module's FIRST
-    import in the whole pytest process -- from whatever ZERODB_DATA_DIR
-    happened to be set at that exact moment. Because pytest runs every test
-    file's tests in one process and Python caches imports in sys.modules, an
-    earlier test file (test_backend_selector.py's _reload_config,
-    test_database_service_lite.py's fixtures, or test_integration_lite.py's
-    own lite_server fixture) can leave these frozen to a *different*
-    directory than the one this module's own fixture sets below.
-
-    Popping only those few obviously-affected modules is NOT enough: a
-    fresh `from main import app` still re-finds routers.*/services.* already
-    sitting in sys.modules from an earlier import and reuses those cached
-    module objects as-is (Python does not re-execute an already-imported
-    module's body) -- so e.g. routers/sync_orchestrator.py's module-level
-    `from database import get_db` stays bound to the OLD database module's
-    OLD SessionLocal/engine even though `database` itself gets reloaded,
-    silently splitting the "fresh" app across old and new engines (hit in
-    CI as "no such table: sync_state": table creation went through one
-    engine, the sync_state read through the other, stale one). Dropping
-    every module under these prefixes forces the whole graph to rebuild
-    consistently against the ZERODB_DATA_DIR this fixture is about to set.
-    """
-    import sys
-    for mod in list(sys.modules):
-        if mod.split(".")[0] in _APP_MODULE_PREFIXES:
-            sys.modules.pop(mod, None)
 
 
 @pytest.fixture(scope="module")
@@ -93,49 +32,68 @@ def lite_server(tmp_path_factory):
     GIVEN a clean SQLite-backed data directory
     WHEN the real lite-mode API server is started
     THEN it should be reachable over HTTP on a dedicated port
+
+    Runs uvicorn in a real subprocess (not an in-process thread). An
+    earlier version of this fixture ran the app in-process behind a
+    sys.modules-purging helper (_force_reimport_lite_stack) to defend
+    against lite.config.ZERODB_BACKEND and friends being plain
+    module-level constants cached from whatever an earlier test file
+    already imported -- confirmed still insufficient once test file
+    ordering changed (api/tests/ joining testpaths, Refs #50, made this
+    module run after a combination that re-triggered full-mode caching:
+    reproduced live, server actually logged "Starting ZeroDB Local in
+    full mode" and every request 500'd). A subprocess gets a completely
+    fresh interpreter and fresh module imports every time, independent
+    of whatever else ran earlier in the same CI job -- see the same
+    pattern in tests/test_lite_mode_crud.py and
+    tests/test_integration_lite.py.
     """
     data_dir = tmp_path_factory.mktemp("zerodb_cdc_sync_data")
-    os.environ["ZERODB_DATA_DIR"] = str(data_dir)
-
-    import sys
     api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
-    if api_dir not in sys.path:
-        sys.path.insert(0, os.path.abspath(api_dir))
-
-    _force_reimport_lite_stack()
-
-    try:
-        from main import app
-    except Exception as exc:
-        pytest.skip(f"Cannot import API app — full source tree required: {exc}")
-
     port = 18744  # distinct from test_lite_mode_crud.py's 18743
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config)
 
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    env = dict(os.environ)
+    env["ZERODB_BACKEND"] = "lite"
+    env["TESTING"] = "true"
+    env["ZERODB_DATA_DIR"] = str(data_dir)
+    env.pop("DATABASE_URL", None)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "uvicorn", "main:app",
+            "--host", "127.0.0.1", "--port", str(port),
+            "--log-level", "error",
+        ],
+        cwd=os.path.abspath(api_dir),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     base_url = f"http://127.0.0.1:{port}"
-    for _ in range(50):
+    try:
+        for _ in range(50):
+            if proc.poll() is not None:
+                pytest.fail(
+                    f"Lite server subprocess exited early with code {proc.returncode}"
+                )
+            try:
+                resp = httpx.get(f"{base_url}/health", timeout=1)
+                if resp.status_code == 200:
+                    break
+            except httpx.ConnectError:
+                time.sleep(0.2)
+        else:
+            pytest.fail("Lite server did not start in time")
+
+        yield base_url
+    finally:
+        proc.terminate()
         try:
-            resp = httpx.get(f"{base_url}/health", timeout=1)
-            if resp.status_code == 200:
-                break
-        except httpx.ConnectError:
-            time.sleep(0.2)
-    else:
-        pytest.fail("Lite server did not start in time")
-
-    yield base_url
-
-    server.should_exit = True
-    thread.join(timeout=5)
-
-    # Leave the module cache the way this fixture found it, so a test file
-    # that runs after this one in the same pytest process gets to make its
-    # own fresh import decision instead of inheriting this module's.
-    _force_reimport_lite_stack()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 @pytest.fixture()

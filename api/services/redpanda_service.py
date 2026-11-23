@@ -51,13 +51,27 @@ class RedPandaService:
     def _get_producer(self) -> "KafkaProducer":
         """Get or create Kafka producer"""
         if self._producer is None:
-            self._producer = KafkaProducer(
-                bootstrap_servers=self.bootstrap_servers,
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                key_serializer=lambda k: k.encode('utf-8') if k else None,
-                acks='all',  # Wait for all replicas
-                retries=3
-            )
+            if not _KAFKA_AVAILABLE or self.testing:
+                # Mock producer for testing -- mirrors _get_admin_client()
+                # above. Without this, publish_event()/publish_batch() try
+                # to open a real KafkaProducer (which blocks for a long
+                # time discovering brokers, then fails) any time this
+                # service runs with TESTING=true but no live RedPanda/Kafka
+                # broker, e.g. full-mode tests. Refs #50.
+                from unittest.mock import MagicMock
+                mock_producer = MagicMock()
+                mock_future = MagicMock()
+                mock_future.get.return_value = MagicMock(partition=0, offset=0)
+                mock_producer.send.return_value = mock_future
+                self._producer = mock_producer
+            else:
+                self._producer = KafkaProducer(
+                    bootstrap_servers=self.bootstrap_servers,
+                    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                    key_serializer=lambda k: k.encode('utf-8') if k else None,
+                    acks='all',  # Wait for all replicas
+                    retries=3
+                )
         return self._producer
 
     async def initialize_topic(
