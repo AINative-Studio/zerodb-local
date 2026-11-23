@@ -98,7 +98,7 @@ describe('formatDate', () => {
   })
 
   it('formats Date object', () => {
-    const result = formatDate(new Date('2024-01-01'))
+    const result = formatDate(new Date('2024-06-15T12:00:00Z'))
     expect(result).toContain('2024')
   })
 })

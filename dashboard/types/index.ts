@@ -1,10 +1,25 @@
+// Shapes below mirror the real API response models in api/routers/*.py
+// and api/schemas/project.py -- keep them in sync with those, not with
+// the cloud product's docs.
+
+export interface ProjectUsage {
+  vectors: number
+  tables: number
+  events: number
+  memory: number
+  files: number
+}
+
 export interface Project {
   id: string
   name: string
-  description?: string
+  description?: string | null
   user_id: string
-  organization_id?: string
-  settings?: Record<string, any>
+  organization_id?: string | null
+  tier?: string
+  status?: string
+  vector_dimensions?: number
+  usage?: ProjectUsage
   created_at: string
   updated_at: string
 }
@@ -21,11 +36,22 @@ export interface ProjectStats {
 
 export interface Vector {
   id: string
-  project_id: string
-  collection: string
-  vector: number[]
-  metadata?: Record<string, any>
-  created_at: string
+  vector_id: string
+  document: string
+  metadata: Record<string, any>
+  namespace: string
+  dimensions?: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface VectorSearchResult {
+  id: string
+  vector_id: string
+  document: string
+  metadata: Record<string, any>
+  score: number
+  namespace: string
 }
 
 export interface Memory {
@@ -40,33 +66,53 @@ export interface Memory {
 
 export interface Table {
   id: string
-  project_id: string
   name: string
-  schema?: Record<string, any>
-  row_count: number
-  created_at: string
-  updated_at: string
+  schema: Record<string, any>
+  description?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
-export interface File {
+export interface TableRow {
   id: string
-  project_id: string
-  name: string
-  path: string
-  mime_type: string
-  file_size: number
-  url?: string
-  metadata?: Record<string, any>
-  created_at: string
-  updated_at: string
-}
-
-export interface Event {
-  id: string
-  project_id: string
-  type: string
   data: Record<string, any>
-  timestamp: string
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface StoredFile {
+  id: string
+  file_name: string
+  file_path: string
+  content_type: string
+  file_size: number
+  folder?: string | null
+  metadata: Record<string, any>
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface FileDownload extends StoredFile {
+  /** Base64-encoded file content */
+  content: string
+}
+
+export interface ZeroEvent {
+  id: string
+  event_type: string
+  source: string | null
+  correlation_id: string | null
+  event_data: Record<string, any>
+  timestamp: string | null
+}
+
+export interface EventStats {
+  time_range: string
+  total_events: number
+  event_type_count: number
+  source_count: number
+  top_event_types: Array<Record<string, any>>
+  event_type?: string | null
 }
 
 export interface HealthStatus {
@@ -161,7 +207,7 @@ export enum BundleStatus {
 export interface LogEntry {
   timestamp: string
   level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL'
-  service: 'postgres' | 'qdrant' | 'minio' | 'redpanda' | 'embeddings' | 'api' | 'dashboard'
+  service: string
   message: string
   source?: string
 }
