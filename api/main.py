@@ -38,6 +38,14 @@ from routers.raymond import router as raymond_router
 # Backend selector
 from lite.config import ZERODB_BACKEND, DATA_DIR, is_lite_mode, is_full_mode
 
+# Lite mode has no Docker containers for api/routers/logs.py to read
+# `docker compose logs` from (Refs #97) -- capture this process's own log
+# output to a file under DATA_DIR instead, as early as possible so startup
+# messages are captured too.
+if is_lite_mode():
+    from lite.log_capture import install as _install_log_capture
+    _install_log_capture(DATA_DIR)
+
 from services.minio_service import minio_service
 
 # Environment variables
