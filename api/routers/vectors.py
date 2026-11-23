@@ -46,7 +46,14 @@ class VectorSearch(BaseModel):
     query: str = Field(..., description="Search query text")
     limit: int = Field(default=10, ge=1, le=100, description="Max results to return")
     threshold: float = Field(default=0.7, ge=0, le=1, description="Similarity threshold")
-    namespace: Optional[str] = Field(default="default", description="Search namespace")
+    # Refs #111: default None, not "default" -- an omitted namespace must
+    # mean "search every namespace", the same as an explicit null already
+    # correctly does. Defaulting to the string "default" made the two
+    # indistinguishable to VectorService.search_vectors, silently excluding
+    # every vector not in the literal "default" namespace whenever a caller
+    # (including the dashboard's own "All namespaces" search) omitted the
+    # field expecting that to mean no filter.
+    namespace: Optional[str] = Field(default=None, description="Search namespace. Omit or pass null to search every namespace.")
     filter_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata filters")
 
 

@@ -326,7 +326,12 @@ class VectorService:
         query: str,
         limit: int = 10,
         threshold: float = 0.7,
-        namespace: Optional[str] = "default",
+        # Refs #111: None, not "default" -- matches the request schema's
+        # default in api/routers/vectors.py, so a caller that omits
+        # namespace entirely gets "search every namespace" (the same thing
+        # an explicit None already does below), not "search only the
+        # literal 'default' namespace".
+        namespace: Optional[str] = None,
         filter_metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """

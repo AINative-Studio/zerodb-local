@@ -190,7 +190,12 @@ export function createApiClient(http: HttpLike = createHttp()) {
     ): Promise<VectorSearchResult[]> {
       const body = {
         query: opts.query,
-        namespace: opts.namespace,
+        // Refs #111: explicit null, not undefined -- JSON.stringify drops
+        // an undefined value entirely, which used to resolve server-side
+        // to the schema default "default" rather than "no filter" (fixed
+        // in api/routers/vectors.py too, but sending null here keeps that
+        // intent explicit instead of depending on the server's default).
+        namespace: opts.namespace ?? null,
         limit: opts.limit ?? 10,
         // The API defaults to 0.7, which hides most results for short
         // queries; show everything ranked by score and let people judge.
