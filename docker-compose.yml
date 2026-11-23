@@ -78,7 +78,10 @@ services:
     networks:
       - zerodb-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # curl isn't in this image: Dockerfile.ainative builds from
+      # golang:1.24-alpine, which doesn't bundle it (the old upstream
+      # minio/minio image did). wget is present and works the same way.
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -220,6 +223,14 @@ services:
       # Environment
       ZERODB_ENV: ${ZERODB_ENV:-local}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # The browser calls this API directly from the dashboard's own origin,
+      # so that origin must be CORS-allowed here. api/main.py defaults
+      # CORS_ORIGINS to localhost:3000, the default ZERODB_DASHBOARD_PORT --
+      # but was never previously threaded through to this service, so
+      # setting ZERODB_DASHBOARD_PORT to anything else silently broke every
+      # dashboard request with no error beyond "Can't reach the API".
+      CORS_ORIGINS: http://localhost:${ZERODB_DASHBOARD_PORT:-3000}
     volumes:
       - ./api:/app
       - ./lite:/app/lite
