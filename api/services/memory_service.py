@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from services.embeddings_service import embeddings_service
 from services.qdrant_service import qdrant_service
 from lite.config import is_lite_mode
-from lite.sql_compat import jsonb_cast_sql, new_id, parse_json_column, to_isoformat
+from lite.sql_compat import jsonb_cast_sql, log_cdc_change, new_id, parse_json_column, to_isoformat
 
 
 def _embedding_cast_sql(expr: str) -> str:
@@ -107,6 +107,22 @@ class MemoryService:
         """)
 
         result = db.execute(insert_query, params).first()
+
+        # Application-level CDC (Refs #63): full mode logs this via the
+        # memory table's INSERT trigger; lite mode has no trigger support,
+        # so log the same change_log row explicitly before committing, so
+        # it lands atomically with the memory row it describes.
+        if lite:
+            log_cdc_change(
+                db, project_id, "memory", result.id, "INSERT",
+                {
+                    "session_id": result.session_id,
+                    "agent_id": result.agent_id,
+                    "role": result.role,
+                    "content": result.content,
+                    "metadata": parse_json_column(result.metadata),
+                },
+            )
 
         db.commit()
 
@@ -416,6 +432,16 @@ class MemoryService:
             delete_query,
             {"project_id": str(project_id), "session_id": session_id}
         )
+
+        # Application-level CDC (Refs #63): full mode logs each deleted row
+        # via the memory table's DELETE trigger; lite mode has no trigger
+        # support, so log the same change_log rows explicitly.
+        if is_lite_mode():
+            for memory_id in memory_ids:
+                log_cdc_change(
+                    db, project_id, "memory", memory_id, "DELETE",
+                    {"session_id": session_id},
+                )
 
         db.commit()
 

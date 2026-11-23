@@ -12,7 +12,15 @@ from sqlalchemy.orm import Session
 from services.embeddings_service import embeddings_service
 from services.qdrant_service import qdrant_service
 from lite.config import is_lite_mode
-from lite.sql_compat import jsonb_cast_sql, new_id, now_iso, now_sql, parse_json_column, to_isoformat
+from lite.sql_compat import (
+    jsonb_cast_sql,
+    log_cdc_change,
+    new_id,
+    now_iso,
+    now_sql,
+    parse_json_column,
+    to_isoformat,
+)
 
 
 def _embedding_cast_sql(expr: str) -> str:
@@ -132,6 +140,20 @@ class VectorService:
                     params["now"] = now_iso()
                 result = db.execute(update_query, params).first()
                 pg_vector_id = str(existing.id)
+
+                # Application-level CDC (Refs #63): full mode logs this via
+                # the vectors table's UPDATE trigger; lite mode has no
+                # trigger support, so log the same change_log row explicitly.
+                if lite:
+                    log_cdc_change(
+                        db, project_id, "vector", pg_vector_id, "UPDATE",
+                        {
+                            "document": document,
+                            "metadata": metadata,
+                            "namespace": namespace,
+                            "vector_id": result.vector_id,
+                        },
+                    )
             else:
                 # Insert new vector with custom ID. In lite mode `id` has no
                 # SQL-level default (Postgres's schema declares DEFAULT
@@ -162,6 +184,17 @@ class VectorService:
                 """)
                 result = db.execute(insert_query, params).first()
                 pg_vector_id = str(result.id)
+
+                if lite:
+                    log_cdc_change(
+                        db, project_id, "vector", pg_vector_id, "INSERT",
+                        {
+                            "document": document,
+                            "metadata": metadata,
+                            "namespace": namespace,
+                            "vector_id": result.vector_id,
+                        },
+                    )
         else:
             # Insert new vector (auto-generate ID)
             columns = "project_id, namespace, embedding, document, metadata"
@@ -186,6 +219,17 @@ class VectorService:
             result = db.execute(insert_query, params).first()
             pg_vector_id = str(result.id)
             vector_id = str(result.id)  # Use the row's UUID as vector_id
+
+            if lite:
+                log_cdc_change(
+                    db, project_id, "vector", pg_vector_id, "INSERT",
+                    {
+                        "document": document,
+                        "metadata": metadata,
+                        "namespace": namespace,
+                        "vector_id": vector_id,
+                    },
+                )
 
         db.commit()
 
@@ -417,6 +461,14 @@ class VectorService:
 
         if not result:
             return False
+
+        # Application-level CDC (Refs #63): full mode logs this via the
+        # vectors table's DELETE trigger; lite mode has no trigger support.
+        if is_lite_mode():
+            log_cdc_change(
+                db, project_id, "vector", result.id, "DELETE",
+                {"namespace": result.namespace, "vector_id": vector_id},
+            )
 
         db.commit()
 

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from services.redpanda_service import redpanda_service
 from lite.config import is_lite_mode
-from lite.sql_compat import jsonb_cast_sql, new_id, parse_json_column, to_isoformat
+from lite.sql_compat import jsonb_cast_sql, log_cdc_change, new_id, parse_json_column, to_isoformat
 
 
 def _bind_timestamp(value: datetime):
@@ -92,6 +92,16 @@ class EventsService:
         """)
 
         result = db.execute(insert_query, params).first()
+
+        # Application-level CDC (Refs #63): full mode logs this via the
+        # events table's INSERT trigger; lite mode has no trigger support,
+        # so log the same change_log row explicitly before committing, so
+        # it lands atomically with the event row it describes.
+        if lite:
+            log_cdc_change(
+                db, project_id, "event", result.id, "INSERT",
+                parse_json_column(result.event_data),
+            )
 
         db.commit()
 

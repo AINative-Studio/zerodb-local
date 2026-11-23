@@ -563,6 +563,25 @@ class SyncOrchestrator:
 
     # Private helper methods
 
+    # Maps EntityType enum values (plural: "tables", "vectors", "memory",
+    # "events", "files" -- used by sync_state, a separate table with its own
+    # key convention) to the singular change_log.entity_type strings CDC
+    # actually writes ("table_row", "vector", "memory", "event", "file" --
+    # see api/db/migrations/001_initial_schema.sql /003_change_detection.sql
+    # for the PL/pgSQL trigger contract in full mode, and
+    # lite/sql_compat.py's log_cdc_change() for the lite-mode equivalent,
+    # Refs #63). Without this mapping, get_unsynced_changes() is queried
+    # with the plural EntityType value and never matches any change_log row
+    # (entity_type="memory" happens to be identical in both, which is why
+    # that one entity type alone appeared unaffected).
+    _CHANGE_LOG_ENTITY_TYPE = {
+        EntityType.TABLES: "table_row",
+        EntityType.VECTORS: "vector",
+        EntityType.MEMORY: "memory",
+        EntityType.EVENTS: "event",
+        EntityType.FILES: "file",
+    }
+
     async def _count_entities_to_sync(
         self,
         project_id: UUID,
@@ -581,12 +600,25 @@ class SyncOrchestrator:
             since = sync_state.last_sync_at if sync_state else None
 
             if direction == SyncDirection.PUSH:
-                # Count local changes
+                # Count local changes. change_log.entity_type is singular
+                # ("table_row", "vector", ...) -- see _CHANGE_LOG_ENTITY_TYPE
+                # above -- NOT entity_type.value, which is the plural
+                # EntityType enum value used by the unrelated sync_state
+                # table above.
                 changes = self.cdc_service.get_unsynced_changes(
-                    self.db, project_id, entity_type.value
+                    self.db, project_id,
+                    self._CHANGE_LOG_ENTITY_TYPE.get(entity_type, entity_type.value)
                 )
 
                 if entity_type == EntityType.TABLES:
+                    # NOTE: counts.tables stays 0 here -- table creation
+                    # itself has no CDC trigger in full mode (only
+                    # table_rows is logged; see 001_initial_schema.sql) and
+                    # is intentionally not logged in lite mode either (#63
+                    # mirrors that exact contract rather than diverging from
+                    # it), and no change_log operation is ever "CREATE"
+                    # (schema/trigger's CHECK constraint only allows
+                    # INSERT/UPDATE/DELETE). Pre-existing, out of scope here.
                     counts.tables = len([c for c in changes if c["operation"] == "CREATE"])
                     counts.table_rows = len(changes)
                 elif entity_type == EntityType.VECTORS:
@@ -807,9 +839,16 @@ class SyncOrchestrator:
                 category="performance"
             ))
 
+        # Refs #63: table_rows must be included here -- it's the count that
+        # actually reflects real pending table data (entity_counts.tables
+        # itself stays 0; see _count_entities_to_sync's comment on why table
+        # creation has no CDC signal in either mode). Omitting it meant this
+        # warning said "No entities to sync" even when table_rows was > 0,
+        # directly contradicting the entity_counts in the same response.
         total_entities = (
-            entity_counts.tables + entity_counts.vectors +
-            entity_counts.memory + entity_counts.events + entity_counts.files
+            entity_counts.tables + entity_counts.table_rows +
+            entity_counts.vectors + entity_counts.memory +
+            entity_counts.events + entity_counts.files
         )
 
         if total_entities == 0:

@@ -8,6 +8,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from lite.sql_compat import to_isoformat
+
 
 class CDCService:
     """
@@ -178,8 +180,18 @@ class CDCService:
                 "entity_id": str(row.entity_id),
                 "operation": row.operation,
                 "data": row.data,
-                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
-                "synced_at": row.synced_at.isoformat() if row.synced_at else None,
+                # Refs #63: this is the CDC read path sync_orchestrator.py's
+                # plan_sync() actually calls. PostgreSQL's timestamp/
+                # synced_at columns come back as real datetime objects
+                # (.isoformat() works directly); SQLite's equivalent columns
+                # are TEXT and come back as the ISO-8601 string that was
+                # already stored (see lite/sql_compat.py's to_isoformat(),
+                # used the same way by the 5 api/services/*_service.py files
+                # for the same dialect difference) -- calling .isoformat()
+                # on that string crashed every lite-mode sync/plan call with
+                # "'str' object has no attribute 'isoformat'".
+                "timestamp": to_isoformat(row.timestamp),
+                "synced_at": to_isoformat(row.synced_at),
                 "synced": row.synced
             })
 
