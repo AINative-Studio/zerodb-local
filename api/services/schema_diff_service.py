@@ -25,6 +25,7 @@ from schemas.schema_diff import (
     ChangeType,
     ChangeSeverity
 )
+from lite.sql_compat import parse_json_column
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class SchemaDiffService:
 
         # Get all tables for this project from our metadata
         query = text("""
-            SELECT name, schema
+            SELECT id, name, schema
             FROM tables
             WHERE project_id = :project_id
             AND deleted_at IS NULL
@@ -121,7 +122,11 @@ class SchemaDiffService:
 
         for row in rows:
             table_name = row.name
-            table_schema = row.schema or {}
+            # PostgreSQL's psycopg2 driver auto-deserializes this jsonb
+            # column to a dict; SQLite returns the raw JSON string (it's
+            # TEXT in lite/db/schema_lite.sql) -- parse_json_column handles
+            # both. Refs #68.
+            table_schema = parse_json_column(row.schema) or {}
 
             # Build column definitions
             columns = {}
@@ -161,13 +166,17 @@ class SchemaDiffService:
                     check_expression=constraint.get('check_expression')
                 ))
 
-            # Get row count
-            count_query = text(f"""
-                SELECT COUNT(*) FROM {table_name}
-                WHERE project_id = :project_id
+            # Get row count. Refs #70: row data for every user-created
+            # logical table lives in the single shared table_rows table
+            # (keyed by table_id), never in a physical SQL table named
+            # after the logical table -- tables_service.py has no
+            # CREATE TABLE statements anywhere, in either backend mode.
+            count_query = text("""
+                SELECT COUNT(*) FROM table_rows
+                WHERE table_id = :table_id
                 AND deleted_at IS NULL
             """)
-            count_result = db.execute(count_query, {"project_id": str(project_id)})
+            count_result = db.execute(count_query, {"table_id": str(row.id)})
             row_count = count_result.scalar()
 
             tables[table_name] = TableDefinition(
