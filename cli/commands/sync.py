@@ -387,8 +387,11 @@ def _display_plan(plan: SyncPlan):
 
     console.print(table)
 
-    # Operations by entity type
-    entity_types = set(op.entity_type for op in plan.operations)
+    # Operations by entity type. Plan-level housekeeping steps (e.g.
+    # "update_watermarks", "mark_synced") have entity_type=None -- they
+    # aren't per-entity operations, so exclude them here: sorted() would
+    # also raise (TypeError comparing None to str) if any slipped through.
+    entity_types = set(op.entity_type for op in plan.operations if op.entity_type is not None)
 
     for entity_type in sorted(entity_types):
         ops = plan.get_by_entity_type(entity_type)
@@ -421,9 +424,15 @@ def _display_plan_enhanced(plan: SyncPlan, direction: str):
     console.print(f"\n[bold cyan]Sync Plan[/bold cyan]")
     console.print(f"[dim]Direction: {direction.upper()} | Mode: {plan.mode} | Created: {plan.created_at[:19]}[/dim]\n")
 
-    # Calculate statistics by entity type
+    # Calculate statistics by entity type. Plan-level housekeeping steps
+    # (e.g. "update_watermarks", "mark_synced") have entity_type=None and
+    # operation=None -- they aren't per-entity data operations and have no
+    # sensible place in a table grouped by entity type, so skip them here
+    # rather than crashing when max(...).title() hits a None operation.
     entity_stats = {}
     for op in plan.operations:
+        if op.entity_type is None:
+            continue
         if op.entity_type not in entity_stats:
             entity_stats[op.entity_type] = {
                 'count': 0,

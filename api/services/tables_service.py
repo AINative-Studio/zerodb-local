@@ -13,6 +13,18 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from lite.config import is_lite_mode
+from lite.sql_compat import (
+    equality_filter_clause,
+    jsonb_cast_sql,
+    merge_json_text,
+    new_id,
+    now_iso,
+    now_sql,
+    parse_json_column,
+    to_isoformat,
+)
+
 # TTL cache for table metadata (project_id:table_name → metadata dict)
 _TABLE_CACHE: Dict[str, Dict[str, Any]] = {}
 _TABLE_CACHE_TTL = int(os.getenv("ZERODB_TABLE_CACHE_TTL", "300"))  # 5 min default
@@ -69,22 +81,31 @@ class TablesService:
         if existing:
             raise ValueError(f"Table '{table_name}' already exists")
 
-        # Create table
-        insert_query = text("""
-            INSERT INTO tables (project_id, name, schema, description)
-            VALUES (:project_id, :name, CAST(:schema AS jsonb), :description)
+        # Create table. In lite mode the `id` column has no SQL-level
+        # default (unlike Postgres's DEFAULT gen_random_uuid()), so an id
+        # must be generated and bound explicitly or SQLite silently stores
+        # NULL for it.
+        lite = is_lite_mode()
+        columns = "project_id, name, schema, description"
+        values = f":project_id, :name, {jsonb_cast_sql(':schema', lite)}, :description"
+        params = {
+            "project_id": str(project_id),
+            "name": table_name,
+            "schema": json.dumps(schema),
+            "description": description
+        }
+        if lite:
+            columns = "id, " + columns
+            values = ":id, " + values
+            params["id"] = new_id()
+
+        insert_query = text(f"""
+            INSERT INTO tables ({columns})
+            VALUES ({values})
             RETURNING id, name, schema, description, created_at, updated_at
         """)
 
-        result = db.execute(
-            insert_query,
-            {
-                "project_id": str(project_id),
-                "name": table_name,
-                "schema": json.dumps(schema),
-                "description": description
-            }
-        ).first()
+        result = db.execute(insert_query, params).first()
 
         db.commit()
 
@@ -96,10 +117,10 @@ class TablesService:
         return {
             "id": str(result.id),
             "name": result.name,
-            "schema": result.schema,
+            "schema": parse_json_column(result.schema),
             "description": result.description,
-            "created_at": result.created_at.isoformat() if result.created_at else None,
-            "updated_at": result.updated_at.isoformat() if result.updated_at else None
+            "created_at": to_isoformat(result.created_at),
+            "updated_at": to_isoformat(result.updated_at)
         }
 
     async def list_tables(
@@ -139,10 +160,10 @@ class TablesService:
             {
                 "id": str(row.id),
                 "name": row.name,
-                "schema": row.schema,
+                "schema": parse_json_column(row.schema),
                 "description": row.description,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                "created_at": to_isoformat(row.created_at),
+                "updated_at": to_isoformat(row.updated_at)
             }
             for row in results
         ]
@@ -196,10 +217,10 @@ class TablesService:
         table_info = {
             "id": str(result.id),
             "name": result.name,
-            "schema": result.schema,
+            "schema": parse_json_column(result.schema),
             "description": result.description,
-            "created_at": result.created_at.isoformat() if result.created_at else None,
-            "updated_at": result.updated_at.isoformat() if result.updated_at else None
+            "created_at": to_isoformat(result.created_at),
+            "updated_at": to_isoformat(result.updated_at)
         }
 
         _TABLE_CACHE[key] = table_info
@@ -223,19 +244,20 @@ class TablesService:
         Returns:
             True if deleted, False if not found
         """
-        delete_query = text("""
+        delete_query = text(f"""
             UPDATE tables
-            SET deleted_at = NOW()
+            SET deleted_at = {now_sql()}
             WHERE project_id = :project_id
             AND name = :table_name
             AND deleted_at IS NULL
             RETURNING id
         """)
 
-        result = db.execute(
-            delete_query,
-            {"project_id": str(project_id), "table_name": table_name}
-        ).first()
+        params = {"project_id": str(project_id), "table_name": table_name}
+        if is_lite_mode():
+            params["now"] = now_iso()
+
+        result = db.execute(delete_query, params).first()
 
         if not result:
             return False
@@ -274,23 +296,30 @@ class TablesService:
 
         table_id = table_info["id"]
 
-        # Insert rows
+        # Insert rows. In lite mode `id` has no SQL-level default (see
+        # create_table's comment above), so generate it explicitly.
+        lite = is_lite_mode()
         inserted_ids = []
         for row_data in rows:
-            insert_query = text("""
-                INSERT INTO table_rows (table_id, project_id, data)
-                VALUES (:table_id, :project_id, CAST(:data AS jsonb))
+            columns = "table_id, project_id, data"
+            values = f":table_id, :project_id, {jsonb_cast_sql(':data', lite)}"
+            params = {
+                "table_id": table_id,
+                "project_id": str(project_id),
+                "data": json.dumps(row_data)
+            }
+            if lite:
+                columns = "id, " + columns
+                values = ":id, " + values
+                params["id"] = new_id()
+
+            insert_query = text(f"""
+                INSERT INTO table_rows ({columns})
+                VALUES ({values})
                 RETURNING id
             """)
 
-            result = db.execute(
-                insert_query,
-                {
-                    "table_id": table_id,
-                    "project_id": str(project_id),
-                    "data": json.dumps(row_data)
-                }
-            ).first()
+            result = db.execute(insert_query, params).first()
 
             inserted_ids.append(str(result.id))
 
@@ -332,51 +361,36 @@ class TablesService:
 
         table_id = table_info["id"]
 
-        # Build query with optional filter
-        if filter_data:
-            # Use JSONB containment operator @>
-            query = text("""
-                SELECT id, data, created_at, updated_at
-                FROM table_rows
-                WHERE table_id = :table_id
-                AND project_id = :project_id
-                AND deleted_at IS NULL
-                AND data @> CAST(:filter AS jsonb)
-                ORDER BY created_at DESC
-                LIMIT :limit OFFSET :offset
-            """)
-            params = {
-                "table_id": table_id,
-                "project_id": str(project_id),
-                "filter": json.dumps(filter_data),
-                "limit": limit,
-                "offset": skip
-            }
-        else:
-            query = text("""
-                SELECT id, data, created_at, updated_at
-                FROM table_rows
-                WHERE table_id = :table_id
-                AND project_id = :project_id
-                AND deleted_at IS NULL
-                ORDER BY created_at DESC
-                LIMIT :limit OFFSET :offset
-            """)
-            params = {
-                "table_id": table_id,
-                "project_id": str(project_id),
-                "limit": limit,
-                "offset": skip
-            }
+        # Build query with optional equality filter on the JSON `data` column
+        # (replaces PostgreSQL's @> containment operator, which SQLite lacks)
+        filter_clause, filter_params = equality_filter_clause(filter_data)
+
+        query = text(f"""
+            SELECT id, data, created_at, updated_at
+            FROM table_rows
+            WHERE table_id = :table_id
+            AND project_id = :project_id
+            AND deleted_at IS NULL
+            {filter_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+        params = {
+            "table_id": table_id,
+            "project_id": str(project_id),
+            "limit": limit,
+            "offset": skip,
+            **filter_params
+        }
 
         results = db.execute(query, params).fetchall()
 
         return [
             {
                 "id": str(row.id),
-                "data": row.data,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                "data": parse_json_column(row.data),
+                "created_at": to_isoformat(row.created_at),
+                "updated_at": to_isoformat(row.updated_at)
             }
             for row in results
         ]
@@ -409,29 +423,63 @@ class TablesService:
 
         table_id = table_info["id"]
 
-        # Update rows using JSONB concatenation operator ||
-        update_query = text("""
-            UPDATE table_rows
-            SET data = data || CAST(:update AS jsonb),
-                updated_at = NOW()
+        if not is_lite_mode():
+            # Update rows using JSONB concatenation operator ||
+            update_query = text("""
+                UPDATE table_rows
+                SET data = data || CAST(:update AS jsonb),
+                    updated_at = NOW()
+                WHERE table_id = :table_id
+                AND project_id = :project_id
+                AND deleted_at IS NULL
+                AND data @> CAST(:filter AS jsonb)
+            """)
+
+            result = db.execute(
+                update_query,
+                {
+                    "table_id": table_id,
+                    "project_id": str(project_id),
+                    "filter": json.dumps(filter_data),
+                    "update": json.dumps(update_data)
+                }
+            )
+
+            db.commit()
+            return result.rowcount
+
+        # SQLite has no || jsonb concatenation operator and no @> containment
+        # operator: select matching rows, merge each row's JSON with
+        # update_data in Python, and write the merged JSON back individually.
+        filter_clause, filter_params = equality_filter_clause(filter_data)
+        select_query = text(f"""
+            SELECT id, data FROM table_rows
             WHERE table_id = :table_id
             AND project_id = :project_id
             AND deleted_at IS NULL
-            AND data @> CAST(:filter AS jsonb)
+            {filter_clause}
         """)
+        matching_rows = db.execute(
+            select_query,
+            {"table_id": table_id, "project_id": str(project_id), **filter_params}
+        ).fetchall()
 
-        result = db.execute(
-            update_query,
-            {
-                "table_id": table_id,
-                "project_id": str(project_id),
-                "filter": json.dumps(filter_data),
-                "update": json.dumps(update_data)
-            }
-        )
+        now = now_iso()
+        updated_count = 0
+        for row in matching_rows:
+            merged_data = merge_json_text(row.data, update_data)
+            db.execute(
+                text("""
+                    UPDATE table_rows
+                    SET data = :data, updated_at = :now
+                    WHERE id = :id
+                """),
+                {"id": row.id, "data": merged_data, "now": now}
+            )
+            updated_count += 1
 
         db.commit()
-        return result.rowcount
+        return updated_count
 
     async def delete_rows(
         self,
@@ -459,24 +507,27 @@ class TablesService:
 
         table_id = table_info["id"]
 
-        # Soft delete rows
-        delete_query = text("""
+        # Soft delete rows matching the equality filter (replaces
+        # PostgreSQL's @> containment operator, which SQLite lacks)
+        filter_clause, filter_params = equality_filter_clause(filter_data)
+        delete_query = text(f"""
             UPDATE table_rows
-            SET deleted_at = NOW()
+            SET deleted_at = {now_sql()}
             WHERE table_id = :table_id
             AND project_id = :project_id
             AND deleted_at IS NULL
-            AND data @> CAST(:filter AS jsonb)
+            {filter_clause}
         """)
 
-        result = db.execute(
-            delete_query,
-            {
-                "table_id": table_id,
-                "project_id": str(project_id),
-                "filter": json.dumps(filter_data)
-            }
-        )
+        params = {
+            "table_id": table_id,
+            "project_id": str(project_id),
+            **filter_params
+        }
+        if is_lite_mode():
+            params["now"] = now_iso()
+
+        result = db.execute(delete_query, params)
 
         db.commit()
         return result.rowcount

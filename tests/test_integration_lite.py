@@ -7,7 +7,6 @@ file operations, and event publishing.
 
 Refs #1884, Refs #1704
 """
-import asyncio
 import os
 import sys
 import json
@@ -189,7 +188,12 @@ class TestVectorOperations:
         if not project_id:
             pytest.skip("No project ID in response")
 
-        # Upsert a vector (384 dims for bge-small)
+        # Upsert a vector (384 dims for bge-small). Generous timeout: this is
+        # the first call in the suite to touch the local embeddings service,
+        # which lazily downloads BAAI/bge-small-en-v1.5 from HuggingFace Hub
+        # on first use (lite/services/embeddings_service_local.py) -- a cold,
+        # unauthenticated-rate-limited CI runner with no model cache can
+        # legitimately take well over 10s. Refs #61.
         vector = [0.1] * 384
         upsert_resp = httpx.post(
             f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
@@ -198,7 +202,7 @@ class TestVectorOperations:
                 "document": "integration test document",
                 "metadata": {"source": "test"},
             },
-            timeout=10,
+            timeout=90,
         )
         # Accept various success codes
         assert upsert_resp.status_code in (200, 201, 202)
@@ -238,7 +242,7 @@ class TestPackageImports:
 class TestLiteServicesImportable:
     """Verify lite backend services can be instantiated."""
 
-    def test_database_service_lite_importable(self, tmp_path):
+    async def test_database_service_lite_importable(self, tmp_path):
         """
         GIVEN ZERODB_BACKEND=lite
         WHEN DatabaseServiceLite is imported
@@ -255,10 +259,7 @@ class TestLiteServicesImportable:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         svc = mod.DatabaseServiceLite(db_path=str(tmp_path / "test.db"))
-        # health_check() is `async def` -- must be awaited, not called
-        # synchronously (that just returns the coroutine object itself,
-        # unsubscriptable). Refs #50.
-        health = asyncio.run(svc.health_check())
+        health = await svc.health_check()
         assert health["status"] in ("healthy", "ok")
 
     def test_faiss_service_importable(self, tmp_path):

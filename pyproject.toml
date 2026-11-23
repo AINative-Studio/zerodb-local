@@ -32,12 +32,14 @@ dependencies = [
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "python-multipart>=0.0.6",
-    # Used unconditionally by api/services/cloud_client.py (local-to-cloud
-    # sync retries), imported at `api.main` startup regardless of
-    # lite/full backend mode -- not a full-mode-only dependency, so it
-    # belongs in core deps rather than the `full` extra. Was previously
-    # only declared in api/requirements.txt, never in this pyproject.toml,
-    # so a plain `pip install -e '.[lite,dev]'` install lacked it. Refs #50.
+    # Refs #46, #50: both used unconditionally by the cloud-sync code path
+    # (cli/sync_planner.py and api/services/cloud_client.py respectively),
+    # imported at `api.main` startup regardless of lite/full backend mode --
+    # not full-mode-only dependencies, so they belong in core deps rather
+    # than the `full` extra. tenacity was previously only declared in
+    # api/requirements.txt, never in this pyproject.toml, so a plain
+    # `pip install -e '.[lite,dev]'` install lacked both.
+    "requests>=2.28.0",
     "tenacity>=8.2.0",
 ]
 

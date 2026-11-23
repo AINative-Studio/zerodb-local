@@ -3,17 +3,19 @@ MinIO Object Storage Service
 Handles file upload/download using MinIO (S3-compatible)
 """
 import os
-from typing import Optional, List, Dict, Any, BinaryIO
+from typing import Optional, List, Dict, Any, BinaryIO, TYPE_CHECKING
 from datetime import timedelta
 from uuid import UUID
 
 try:
     from minio import Minio
     from minio.error import S3Error
-    from urllib3.response import HTTPResponse
     _MINIO_AVAILABLE = True
 except ImportError:
     _MINIO_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from urllib3.response import HTTPResponse
 
 
 class MinIOService:
@@ -147,7 +149,7 @@ class MinIOService:
         self,
         object_name: str,
         bucket_name: str = None
-    ) -> Optional[HTTPResponse]:
+    ) -> Optional["HTTPResponse"]:
         """
         Download file from MinIO
 
