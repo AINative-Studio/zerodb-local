@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from lite.db.migrations import apply_pending_migrations
 from lite.services.cdc_service import CDCService
 
 
@@ -110,7 +111,23 @@ class DatabaseServiceLite:
         self._init_schema()
 
     def _init_schema(self):
-        """Apply the SQLite schema file to create tables if they do not exist."""
+        """Apply the SQLite schema file to create tables if they do not
+        exist, after running any pending schema migrations.
+
+        Refs #113: CREATE TABLE IF NOT EXISTS (below) is a no-op against a
+        table that already exists under an older column layout -- it only
+        ever creates genuinely-missing tables, never repairs an existing
+        one, and this method used to silently swallow every exception a
+        statement raised, with no way to tell a real schema mismatch apart
+        from a merely-already-applied statement. Migrations run first (and
+        are NOT silently swallowed -- see lite/db/migrations.py) so any
+        table that needs more than "create if missing" is brought up to
+        date before this falls back to the normal, idempotent schema
+        application for everything else.
+        """
+        with self.engine.connect() as conn:
+            apply_pending_migrations(conn)
+
         with open(SCHEMA_FILE, "r") as f:
             schema_sql = f.read()
 

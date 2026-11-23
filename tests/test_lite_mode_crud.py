@@ -11,6 +11,7 @@ each affected service end-to-end -- no mocks, following the pattern
 established in tests/test_integration_lite.py.
 """
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1143,12 +1144,21 @@ class TestSyncStatusAndHistory:
         larger gap than this issue (#73) covers. See the
         DASHBOARD_REDESIGN.md follow-ups note for that gap.
 
-        UUID columns use SQLAlchemy's `postgresql.UUID(as_uuid=True)` type
+        id/sync_id use SQLAlchemy's `postgresql.UUID(as_uuid=True)` type
         (shared with the full-mode model), which on the SQLite dialect
         binds/compares values as 32-char dash-less hex -- not the dashed
-        str(uuid.UUID) form. The raw insert below stores ids the same way
-        the ORM actually would, so the read-back through the real
-        project_id-filtered endpoint exercises the real storage format.
+        str(uuid.UUID) form -- so those are seeded in .hex form, matching
+        what the ORM itself would write/filter by.
+
+        project_id is the one exception (Refs #113): it's a
+        LiteCompatibleUUID column specifically because it's also a real
+        FOREIGN KEY REFERENCES projects(id), and projects.id is written as
+        a dashed string by the real app (lite/sql_compat.py's new_id()) --
+        a plain TEXT column with no ORM UUID coercion of its own. Seeding
+        project_id in .hex form here would violate that FK against a real
+        projects row (confirmed directly) and, before LiteCompatibleUUID
+        existed, silently failed to match in the project_id-filtered query
+        below even when the FK happened to be satisfied some other way.
         """
         import sqlite3
         import uuid as uuid_mod
@@ -1164,7 +1174,7 @@ class TestSyncStatusAndHistory:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    uuid_mod.uuid4().hex, uuid_mod.UUID(project_id).hex,
+                    uuid_mod.uuid4().hex, project_id,
                     sync_id.hex, "push", "full", "completed", "{}", 0,
                 ),
             )
@@ -1211,7 +1221,12 @@ class TestSyncConflicts:
         reasoning as TestSyncStatusAndHistory's round-trip test for why not
         an in-process database.py import), then read it back over the real
         HTTP endpoint -- confirms the ORM-expected columns actually
-        round-trip."""
+        round-trip.
+
+        project_id is seeded as the real dashed project_id (not .hex) --
+        it's a LiteCompatibleUUID column now (Refs #113), matching
+        projects.id's own dashed-string storage, which the real
+        REFERENCES projects(id) foreign key requires exactly."""
         import json
         import sqlite3
         import uuid as uuid_mod
@@ -1228,7 +1243,7 @@ class TestSyncConflicts:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """,
                 (
-                    conflict_id.hex, uuid_mod.UUID(project_id).hex,
+                    conflict_id.hex, project_id,
                     "vector", "vec-1",
                     json.dumps({"text": "local"}), json.dumps({"text": "cloud"}),
                     "newest_wins", json.dumps({"text": "cloud"}),
@@ -1247,4 +1262,206 @@ class TestSyncConflicts:
         items = resp.json()
         assert len(items) == 1
         assert items[0]["entity_type"] == "vector"
-        assert items[0]["resolution_strategy"] == "newest_wins"
+
+
+class TestSchemaMigrationOfAPreExistingDatabase:
+    """
+    Refs #113: #73/#79 fixed sync_history/conflict_log's schema in
+    lite/db/schema_lite.sql, but lite/services/database_service_lite.py's
+    _init_schema() only ever ran "CREATE TABLE IF NOT EXISTS ..." -- a
+    no-op against a table that already exists under the older shape. Every
+    database created before those fixes landed was silently left on the
+    old schema forever; found live against a real, organically-aged
+    ~/.zerodb/data/zerodb.db during a deep UI testing pass, surfacing as
+    an unhelpful 503 on GET /sync/history and GET /sync/conflicts with the
+    real cause (sqlite3.OperationalError: no such column: ...) visible
+    only in the server log, never to the user.
+
+    This test builds a real on-disk SQLite database with the exact old
+    schema shape (seeded with real-looking data, not an ORM or any current
+    code -- deliberately matching the production bug, not this repo's own
+    idea of what the old shape was), starts a real lite-mode server
+    against it, and confirms both that the server survives startup (the
+    migration itself must run without exceptions) and that the previously-
+    broken endpoints now return the old data correctly instead of 503ing.
+    """
+
+    @staticmethod
+    def _seed_old_shape_database(db_path: str) -> dict:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                "description TEXT, user_id TEXT, status TEXT DEFAULT 'ACTIVE', "
+                "settings TEXT DEFAULT '{}', created_at TEXT, updated_at TEXT, deleted_at TEXT)"
+            )
+            # Exact old pre-#73 shape, including the FK constraint the real
+            # old schema_lite.sql also had (git show 5b71a45^:lite/db/
+            # schema_lite.sql) -- sync_direction/sync_mode/errors, no
+            # sync_id. Keeping the FK here matters: it's what guarantees
+            # project_id was always stored in a format that matches
+            # projects.id exactly, the same guarantee the migration itself
+            # relies on when copying project_id forward unchanged.
+            conn.execute(
+                "CREATE TABLE sync_history (id TEXT PRIMARY KEY, "
+                "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, "
+                "sync_direction TEXT, sync_mode TEXT, status TEXT, records_synced TEXT, "
+                "errors TEXT, started_at TEXT, completed_at TEXT)"
+            )
+            # Exact old pre-#79 shape (git show b12aef2^:lite/db/schema_lite.sql),
+            # same FK-constraint reasoning as sync_history above.
+            conn.execute(
+                "CREATE TABLE conflict_log (id TEXT PRIMARY KEY, "
+                "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, "
+                "entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, local_value TEXT, "
+                "cloud_value TEXT, local_timestamp TEXT, cloud_timestamp TEXT, "
+                "resolution_strategy TEXT, resolved_value TEXT, resolved_at TEXT, created_at TEXT)"
+            )
+            conn.execute("PRAGMA foreign_keys=ON")
+
+            import uuid as uuid_mod
+
+            # projects.id is written as a dashed UUID string by the real
+            # app (lite/sql_compat.py's new_id(), str(uuid4())) -- matching
+            # that exactly here is what the old schema's REFERENCES
+            # projects(id) constraint (above) requires, the same as it
+            # would have for any row the real app actually wrote before
+            # #73/#79 landed.
+            project_id = str(uuid_mod.uuid4())
+            conn.execute(
+                "INSERT INTO projects (id, name, user_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (project_id, "pre-migration-project", "00000000-0000-0000-0000-000000000001",
+                 "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+            )
+
+            sync_row_id = str(uuid_mod.uuid4())
+            conn.execute(
+                "INSERT INTO sync_history (id, project_id, sync_direction, sync_mode, "
+                "status, records_synced, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (sync_row_id, project_id, "push", "full", "completed", "{}",
+                 "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z"),
+            )
+
+            conflict_row_id = str(uuid_mod.uuid4())
+            conn.execute(
+                "INSERT INTO conflict_log (id, project_id, entity_type, entity_id, "
+                "local_value, cloud_value, resolution_strategy, resolved_value, resolved_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (conflict_row_id, project_id, "vector", "vec-pre-migration",
+                 '{"text": "old local"}', '{"text": "old cloud"}', "newest_wins",
+                 '{"text": "old cloud"}', "2026-01-01T00:02:00Z"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return {
+            "project_id": project_id,
+            "sync_row_id": sync_row_id,
+            "conflict_row_id": conflict_row_id,
+        }
+
+    def test_server_migrates_and_serves_a_pre_existing_old_shape_database(self, tmp_path):
+        data_dir = str(tmp_path)
+        seeded = self._seed_old_shape_database(os.path.join(data_dir, "zerodb.db"))
+
+        api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
+        port = 18747
+        env = dict(os.environ)
+        env["ZERODB_BACKEND"] = "lite"
+        env["TESTING"] = "true"
+        env["ZERODB_DATA_DIR"] = data_dir
+        env.pop("DATABASE_URL", None)
+
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "uvicorn", "main:app",
+                "--host", "127.0.0.1", "--port", str(port),
+                "--log-level", "error",
+            ],
+            cwd=os.path.abspath(api_dir),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        try:
+            for _ in range(50):
+                if proc.poll() is not None:
+                    pytest.fail(
+                        f"server failed to start against a pre-existing old-shape "
+                        f"database, exit code {proc.returncode} -- the migration "
+                        f"itself likely raised"
+                    )
+                try:
+                    if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
+                        break
+                except httpx.ConnectError:
+                    time.sleep(0.2)
+            else:
+                pytest.fail("server did not start in time")
+
+            project_id = seeded["project_id"]
+
+            # This is the exact endpoint that previously 503'd.
+            history_resp = httpx.get(
+                f"{base_url}/v1/projects/{project_id}/sync/history",
+                timeout=10,
+            )
+            assert history_resp.status_code == 200, history_resp.text
+            items = history_resp.json()["items"]
+            assert len(items) == 1
+            assert items[0]["direction"] == "push"
+            assert items[0]["mode"] == "full"
+            assert items[0]["status"] == "completed"
+
+            conflicts_resp = httpx.get(
+                f"{base_url}/v1/projects/{project_id}/sync/conflicts/",
+                params={"limit": 100},
+                timeout=10,
+            )
+            assert conflicts_resp.status_code == 200, conflicts_resp.text
+            conflict_items = conflicts_resp.json()
+            assert len(conflict_items) == 1
+            assert conflict_items[0]["entity_type"] == "vector"
+            assert conflict_items[0]["resolution_strategy"] == "newest_wins"
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+    def test_migration_is_safe_to_run_twice(self, tmp_path):
+        """A second server launch against an already-migrated database
+        must not fail or duplicate data -- apply_pending_migrations must
+        actually skip migrations it already applied, not just happen to
+        no-op by accident."""
+        data_dir = str(tmp_path)
+        db_path = os.path.join(data_dir, "zerodb.db")
+        self._seed_old_shape_database(db_path)
+
+        import sys as _sys
+        sys_path_before = list(_sys.path)
+        try:
+            _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+            from lite.services.database_service_lite import DatabaseServiceLite
+
+            DatabaseServiceLite(db_path=db_path)
+            DatabaseServiceLite(db_path=db_path)
+        finally:
+            _sys.path[:] = sys_path_before
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM sync_history")
+            assert cur.fetchone()[0] == 1, "row duplicated by running the migration twice"
+            cur.execute("SELECT COUNT(*) FROM conflict_log")
+            assert cur.fetchone()[0] == 1, "row duplicated by running the migration twice"
+            cur.execute("SELECT COUNT(*) FROM schema_migrations")
+            assert cur.fetchone()[0] == 2, "migrations table should have exactly the 2 known migrations"
+        finally:
+            conn.close()

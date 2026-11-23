@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
 from models.types import LiteCompatibleDateTime as DateTime
+from models.types import LiteCompatibleUUID
 
 Base = declarative_base()
 
@@ -23,7 +24,12 @@ class ConflictLog(Base):
     __tablename__ = "conflict_log"
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    # Refs #113: LiteCompatibleUUID, not plain PG_UUID -- see
+    # api/models/sync_history.py's project_id for the full explanation
+    # (projects.id is dashed-string TEXT in lite mode; plain PG_UUID's
+    # SQLite bind encoding is hex-only, so filtering by this column
+    # silently matched nothing against real, FK-valid data).
+    project_id = Column(LiteCompatibleUUID(), nullable=False, index=True)
 
     # Entity identification
     entity_type = Column(String(50), nullable=False)  # 'vector', 'table_row', 'memory', etc.
