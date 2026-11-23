@@ -8,40 +8,14 @@ file operations, and event publishing.
 Refs #1884, Refs #1704
 """
 import os
+import subprocess
 import sys
 import json
 import time
-import threading
 from unittest.mock import patch
 
 import pytest
 import httpx
-import uvicorn
-
-
-# Force lite mode for all tests
-os.environ["ZERODB_BACKEND"] = "lite"
-os.environ["TESTING"] = "true"
-
-# lite.config.ZERODB_BACKEND (and anything that did
-# `from lite.config import ZERODB_BACKEND`, e.g. api/main.py, api/health.py)
-# is a plain module-level constant computed once at first import -- setting
-# the env var above has no effect on an already-imported copy. When this
-# file runs standalone that's fine (nothing has imported them yet), but
-# since api/tests/conftest.py joined the same testpaths (Refs #50) and
-# needs full mode, a single combined `pytest` invocation can import
-# `main`/`lite.config` full-mode-first, permanently wrong for the rest of
-# the process. Purge them so the `from main import app` in lite_server()
-# below re-imports fresh against the ZERODB_BACKEND set here.
-_BACKEND_SENSITIVE_MODULES = {
-    "lite.config", "main", "health", "database", "auth",
-    "routers", "services", "middleware",
-}
-for _mod in list(sys.modules):
-    if _mod in _BACKEND_SENSITIVE_MODULES or _mod.startswith(
-        tuple(f"{name}." for name in _BACKEND_SENSITIVE_MODULES)
-    ):
-        del sys.modules[_mod]
 
 
 @pytest.fixture(scope="module")
@@ -50,44 +24,67 @@ def lite_server(tmp_path_factory):
     GIVEN a clean data directory
     WHEN the lite server is started
     THEN it should be reachable on a random port
+
+    Runs uvicorn in a real subprocess (not an in-process thread) rather
+    than importing `main` directly into this test process. lite.config's
+    ZERODB_BACKEND is a module-level constant computed once at import time
+    (Refs #50/#63) -- if anything imported earlier in a shared pytest
+    process (e.g. api/tests/, now in the same testpaths run) already
+    triggered that evaluation with a Postgres-shaped DATABASE_URL set,
+    is_lite_mode() silently returns False for the rest of that process
+    regardless of the ZERODB_BACKEND env var, since nothing re-evaluates
+    it. An earlier fix purged sys.modules at this module's own import
+    time, but that's a one-shot check too early relative to pytest
+    importing every test module up front before running any of them --
+    a subprocess sidesteps the whole problem with a genuinely fresh
+    interpreter, independent of test file import order.
     """
     data_dir = tmp_path_factory.mktemp("zerodb_data")
-    os.environ["ZERODB_DATA_DIR"] = str(data_dir)
-
-    # Import after env vars are set
-    import sys
     api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
-    if api_dir not in sys.path:
-        sys.path.insert(0, os.path.abspath(api_dir))
-
-    try:
-        from main import app
-    except Exception:
-        pytest.skip("Cannot import API app — full source tree required")
-
     port = 18742  # unlikely to conflict
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config)
 
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    env = dict(os.environ)
+    env["ZERODB_BACKEND"] = "lite"
+    env["TESTING"] = "true"
+    env["ZERODB_DATA_DIR"] = str(data_dir)
+    env.pop("DATABASE_URL", None)
 
-    # Wait for server to be ready
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "uvicorn", "main:app",
+            "--host", "127.0.0.1", "--port", str(port),
+            "--log-level", "error",
+        ],
+        cwd=os.path.abspath(api_dir),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
     base_url = f"http://127.0.0.1:{port}"
-    for _ in range(30):
+    try:
+        for _ in range(30):
+            if proc.poll() is not None:
+                pytest.fail(
+                    f"Lite server subprocess exited early with code {proc.returncode}"
+                )
+            try:
+                resp = httpx.get(f"{base_url}/health", timeout=1)
+                if resp.status_code == 200:
+                    break
+            except httpx.ConnectError:
+                time.sleep(0.2)
+        else:
+            pytest.fail("Lite server did not start within 6 seconds")
+
+        yield base_url
+    finally:
+        proc.terminate()
         try:
-            resp = httpx.get(f"{base_url}/health", timeout=1)
-            if resp.status_code == 200:
-                break
-        except httpx.ConnectError:
-            time.sleep(0.2)
-    else:
-        pytest.fail("Lite server did not start within 6 seconds")
-
-    yield base_url
-
-    server.should_exit = True
-    thread.join(timeout=5)
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 class TestHealthEndpoint:

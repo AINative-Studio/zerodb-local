@@ -11,17 +11,12 @@ each affected service end-to-end -- no mocks, following the pattern
 established in tests/test_integration_lite.py.
 """
 import os
+import subprocess
+import sys
 import time
-import threading
 
 import pytest
 import httpx
-import uvicorn
-
-
-# Force lite mode for this module, with an isolated data dir per test run
-os.environ["ZERODB_BACKEND"] = "lite"
-os.environ["TESTING"] = "true"
 
 
 @pytest.fixture(scope="module")
@@ -30,42 +25,65 @@ def lite_server(tmp_path_factory):
     GIVEN a clean SQLite-backed data directory
     WHEN the real lite-mode API server is started
     THEN it should be reachable over HTTP on a dedicated port
+
+    Runs uvicorn in a real subprocess (not an in-process thread) rather
+    than importing `main` directly into this test process. lite.config's
+    ZERODB_BACKEND is a module-level constant computed once at import time
+    (Refs #50/#63) -- if anything imported earlier in a shared pytest
+    process (e.g. api/tests/, now in the same testpaths run) already
+    triggered that evaluation with a Postgres-shaped DATABASE_URL set,
+    is_lite_mode() silently returns False for the rest of that process
+    regardless of the ZERODB_BACKEND env var set here, since nothing
+    re-evaluates it. A subprocess gets a completely fresh interpreter and
+    fresh module imports, so it's genuinely isolated from whatever else
+    ran earlier in the same CI job -- independent of test file order.
     """
     data_dir = tmp_path_factory.mktemp("zerodb_crud_data")
-    os.environ["ZERODB_DATA_DIR"] = str(data_dir)
-
-    import sys
     api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
-    if api_dir not in sys.path:
-        sys.path.insert(0, os.path.abspath(api_dir))
-
-    try:
-        from main import app
-    except Exception as exc:
-        pytest.skip(f"Cannot import API app — full source tree required: {exc}")
-
     port = 18743  # distinct from test_integration_lite.py's 18742
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config)
 
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    env = dict(os.environ)
+    env["ZERODB_BACKEND"] = "lite"
+    env["TESTING"] = "true"
+    env["ZERODB_DATA_DIR"] = str(data_dir)
+    env.pop("DATABASE_URL", None)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "uvicorn", "main:app",
+            "--host", "127.0.0.1", "--port", str(port),
+            "--log-level", "error",
+        ],
+        cwd=os.path.abspath(api_dir),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     base_url = f"http://127.0.0.1:{port}"
-    for _ in range(50):
+    try:
+        for _ in range(50):
+            if proc.poll() is not None:
+                pytest.fail(
+                    f"Lite server subprocess exited early with code {proc.returncode}"
+                )
+            try:
+                resp = httpx.get(f"{base_url}/health", timeout=1)
+                if resp.status_code == 200:
+                    break
+            except httpx.ConnectError:
+                time.sleep(0.2)
+        else:
+            pytest.fail("Lite server did not start in time")
+
+        yield base_url
+    finally:
+        proc.terminate()
         try:
-            resp = httpx.get(f"{base_url}/health", timeout=1)
-            if resp.status_code == 200:
-                break
-        except httpx.ConnectError:
-            time.sleep(0.2)
-    else:
-        pytest.fail("Lite server did not start in time")
-
-    yield base_url
-
-    server.should_exit = True
-    thread.join(timeout=5)
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 @pytest.fixture()
