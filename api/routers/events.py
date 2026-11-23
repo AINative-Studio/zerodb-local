@@ -65,6 +65,13 @@ class SubscriptionResponse(BaseModel):
     event_types: Optional[List[str]]
 
 
+class SubscriptionRequest(BaseModel):
+    """Schema for subscribing to an event stream"""
+    event_types: Optional[List[str]] = Field(
+        default=None, description="Optional filter by event types"
+    )
+
+
 # Endpoints
 
 @router.post("", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
@@ -253,10 +260,14 @@ async def get_event_stats(
         )
 
 
-@router.post("/subscribe", response_model=SubscriptionResponse)
+@router.post(
+    "/subscribe",
+    response_model=SubscriptionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def subscribe_to_events(
     project_id: UUID,
-    event_types: Optional[List[str]] = None,
+    subscription: SubscriptionRequest = SubscriptionRequest(),
     current_user = Depends(get_current_user_flexible)
 ):
     """
@@ -275,7 +286,7 @@ async def subscribe_to_events(
     try:
         result = await events_service.subscribe_to_events(
             project_id=project_id,
-            event_types=event_types
+            event_types=subscription.event_types
         )
 
         return SubscriptionResponse(**result)

@@ -1,5 +1,11 @@
 """
 Tests for RedPanda Health Check Fix (Issue #1127)
+
+Refs #50: mocks `_admin_client` (the real private attribute
+RedPandaService._get_admin_client() lazily caches to and reads from), not
+`admin_client` -- the public name doesn't exist on RedPandaService, so
+setting it previously created an unrelated instance attribute that
+_get_admin_client() never saw, silently defeating the mock.
 """
 import pytest
 import sys
@@ -31,9 +37,9 @@ class TestRedPandaHealthCheck:
         mock_cluster = MagicMock()
         mock_cluster.brokers.return_value = [mock_broker1, mock_broker2]
 
-        redpanda_service.admin_client = MagicMock()
-        redpanda_service.admin_client.list_topics.return_value = ['topic1', 'topic2']
-        redpanda_service.admin_client._client.cluster = mock_cluster
+        redpanda_service._admin_client = MagicMock()
+        redpanda_service._admin_client.list_topics.return_value = ['topic1', 'topic2']
+        redpanda_service._admin_client._client.cluster = mock_cluster
 
         # Call health check
         result = await redpanda_service.health_check()
@@ -48,8 +54,8 @@ class TestRedPandaHealthCheck:
     async def test_health_check_handles_errors(self, redpanda_service):
         """Test health check returns unhealthy status on errors"""
         # Mock admin client to raise exception
-        redpanda_service.admin_client = MagicMock()
-        redpanda_service.admin_client.list_topics.side_effect = Exception("Connection failed")
+        redpanda_service._admin_client = MagicMock()
+        redpanda_service._admin_client.list_topics.side_effect = Exception("Connection failed")
 
         # Call health check
         result = await redpanda_service.health_check()
