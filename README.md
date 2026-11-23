@@ -66,11 +66,14 @@ zerodb serve --port 9000                         # different API port
 zerodb serve --host 0.0.0.0                      # reachable from your network (set a key, below)
 ZERODB_DATA_DIR=/my/data zerodb serve            # different data folder
 CLOUD_API_KEY=sk_... zerodb serve                # enable cloud sync
+zerodb serve --watch                             # auto-restart if the server crashes
 ```
 
 If you change the API port, set `NEXT_PUBLIC_API_URL` in `dashboard/.env.local` to match and restart `npm run dev`.
 
 When running from a source checkout, `zerodb serve` also accepts `--data-dir` and `--cloud-key`.
+
+With `--watch`, if the server process dies unexpectedly (a crash, an OOM kill, anything other than you stopping it with Ctrl+C), it restarts automatically with a short backoff. If it crashes repeatedly in a tight loop, `--watch` gives up and exits instead of restarting forever, so a persistent problem (like a corrupted data directory) surfaces as an error rather than spinning silently.
 
 ---
 
