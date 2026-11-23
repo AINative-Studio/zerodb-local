@@ -405,8 +405,15 @@ def _create_qdrant_service():
     try:
         from lite.config import is_lite_mode
         if is_lite_mode():
+            from lite.config import DATA_DIR
             from lite.services.faiss_service import FAISSService
-            return FAISSService()
+            # Refs #88: FAISSService() with no data_dir falls back to its own
+            # hardcoded ~/.zerodb/data default, ignoring this process's real
+            # --data-dir/ZERODB_DATA_DIR -- unlike DatabaseServiceLite (SQLite),
+            # which already resolves it correctly. Every zerodb serve instance
+            # was silently sharing one global FAISS index regardless of
+            # --data-dir. Pass the same DATA_DIR the rest of the app uses.
+            return FAISSService(data_dir=str(DATA_DIR))
     except ImportError:
         pass
     return QdrantService()
