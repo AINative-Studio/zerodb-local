@@ -33,8 +33,14 @@ export function buildStoreRequest(form: MemoryFormState): StoreMemoryRequest {
     agent_id: form.agentId.trim() || 'default',
     metadata,
   }
-  const sid = form.sessionId.trim()
-  if (sid) body.session_id = sid
+  // Refs #77: api/services/memory_service.py's list_sessions() filters out
+  // any memory whose session_id is null, so omitting session_id entirely
+  // (as this used to do for a blank field) stores the memory successfully
+  // but makes it permanently invisible on the Memory page -- contradicting
+  // this field's own "Leave blank to start a new one" hint. Generate one
+  // client-side instead, so a new session is actually started.
+  const sid = form.sessionId.trim() || crypto.randomUUID()
+  body.session_id = sid
   return body
 }
 
