@@ -10,6 +10,10 @@ import * as React from 'react'
 export function useNewParam(): [boolean, (open: boolean) => void] {
   const [open, setOpen] = React.useState(false)
   React.useEffect(() => {
+    // One-shot read of a browser-only API on mount (see the docstring
+    // above for why this can't just be the initial useState value), empty
+    // deps, no cascading-render risk.
+    /* eslint-disable-next-line react-hooks/set-state-in-effect */
     if (new URLSearchParams(window.location.search).get('new') === '1') setOpen(true)
   }, [])
   return [open, setOpen]

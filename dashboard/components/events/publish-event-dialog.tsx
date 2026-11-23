@@ -34,10 +34,17 @@ export function PublishEventDialog({
 
   React.useEffect(() => {
     if (open) {
+      // Resetting a controlled dialog's form state when it opens, keyed
+      // on the `open` prop itself: a documented, intended use of this
+      // pattern
+      // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes),
+      // not the derived-state anti-pattern the rule targets.
+      /* eslint-disable react-hooks/set-state-in-effect */
       setType('')
       setSource('dashboard')
       setData('{\n  \n}')
       setError(null)
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [open])
 

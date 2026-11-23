@@ -34,9 +34,13 @@ export default function SettingsPage() {
   const [dashboardUrl, setDashboardUrl] = React.useState('')
 
   React.useEffect(() => {
+    // One-shot read of browser-only preferences/location on mount for
+    // hydration safety, empty deps, no cascading-render risk.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setMode(getFormMode())
     setNs(getDefaultNamespace())
     setDashboardUrl(window.location.origin)
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [])
 
   const backend = health.data?.backend
@@ -130,6 +134,9 @@ function Connection() {
   const [saved, setSaved] = React.useState(false)
 
   React.useEffect(() => {
+    // One-shot read of browser-only storage on mount for hydration safety,
+    // empty deps, no cascading-render risk.
+    /* eslint-disable-next-line react-hooks/set-state-in-effect */
     setSaved(!!getApiKey())
   }, [])
 

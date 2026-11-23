@@ -51,12 +51,18 @@ export function CreateTableDialog({
 
   React.useEffect(() => {
     if (!open) return
+    // Resetting a controlled dialog's form state when it opens, keyed on
+    // the `open` prop itself: a documented, intended use of this pattern,
+    // not the derived-state anti-pattern the rule targets. getFormMode()
+    // reads localStorage, an impure read render must not perform.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setMode(getFormMode())
     setName('')
     setDescription('')
     setColumns(STARTER)
     setJson(JSON.stringify(columnsToSchema(STARTER), null, 2))
     setError(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open])
 
   const switchMode = (next: FormMode) => {

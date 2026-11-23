@@ -50,9 +50,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = React.useState(false)
 
   React.useEffect(() => {
+    // One-shot hydration sync (see the comment above the state
+    // declarations): reads browser-only values once on mount so server
+    // and client HTML match, no cascading-render risk from the fixed,
+    // empty dependency array.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setPref(readStored())
     setSystemDark(systemPrefersDark())
     setReady(true)
+    /* eslint-enable react-hooks/set-state-in-effect */
     if (typeof window.matchMedia !== 'function') return
     const mq = window.matchMedia(DARK_QUERY)
     const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches)

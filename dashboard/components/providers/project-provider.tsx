@@ -34,6 +34,9 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [chosen, setChosen] = React.useState<string | null>(null)
   React.useEffect(() => {
     try {
+      // One-shot localStorage read on mount for hydration safety, empty
+      // deps, no cascading-render risk.
+      /* eslint-disable-next-line react-hooks/set-state-in-effect */
       setChosen(window.localStorage.getItem(STORAGE_KEY))
     } catch {
       // storage blocked: fall back to the first project

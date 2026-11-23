@@ -15,7 +15,7 @@ export const PROJECT = {
 }
 
 /** Renders a page inside the same providers the root layout uses. */
-export function renderPage(ui: React.ReactElement) {
+export function renderPage(ui: React.ReactElement<any>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <ThemeProvider>
