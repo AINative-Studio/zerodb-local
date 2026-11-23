@@ -491,3 +491,32 @@ class TestFilesCRUD:
             timeout=10,
         )
         assert delete_resp.status_code == 204
+
+
+class TestSyncPlanWithSchemaComparison:
+    """Refs #68: schema_diff_service.py's _get_postgres_tables did
+    `table_schema.get('fields', {})` on the tables.schema column's raw
+    value, which psycopg2 auto-deserializes to a dict in full mode but
+    SQLite returns as a plain JSON string -- crashed sync/plan's default
+    include_schema=True path in lite mode as soon as any table existed."""
+
+    def test_sync_plan_with_schema_comparison_after_table_exists(
+        self, lite_server, project_id
+    ):
+        create_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/tables",
+            json={"table_name": "widgets", "schema": {"name": "string"}},
+            timeout=10,
+        )
+        assert create_resp.status_code == 201, create_resp.text
+
+        plan_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/sync/plan",
+            json={
+                "direction": "push",
+                "conflict_strategy": "newest_wins",
+                "include_schema": True,
+            },
+            timeout=15,
+        )
+        assert plan_resp.status_code == 200, plan_resp.text
