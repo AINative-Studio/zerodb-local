@@ -1,0 +1,3 @@
+[submodule "vendor/minio"]
+	path = vendor/minio
+	url = https://github.com/AINative-Studio/minio.git
