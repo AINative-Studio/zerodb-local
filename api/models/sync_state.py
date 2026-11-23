@@ -10,6 +10,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 from models.types import LiteCompatibleDateTime as DateTime
+from models.types import LiteCompatibleUUID
 
 Base = declarative_base()
 
@@ -24,8 +25,13 @@ class SyncState(Base):
     __tablename__ = "sync_state"
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    # Refs #113: LiteCompatibleUUID, not plain PG_UUID -- see
+    # api/models/sync_history.py's project_id for the full explanation
+    # (projects.id is a dashed-string TEXT column in lite mode; plain
+    # PG_UUID's SQLite bind encoding is hex-only, so filtering by this
+    # column would silently match nothing against real, FK-valid data).
     project_id = Column(
-        PG_UUID(as_uuid=True),
+        LiteCompatibleUUID(),
         ForeignKey('projects.id', ondelete='CASCADE'),
         nullable=False,
         index=True

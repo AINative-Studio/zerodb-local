@@ -10,6 +10,7 @@ from uuid import uuid4
 import uuid
 
 from models.types import LiteCompatibleDateTime as TIMESTAMP
+from models.types import LiteCompatibleUUID
 
 Base = declarative_base()
 
@@ -34,8 +35,13 @@ class SyncHistory(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
 
     # Foreign keys
+    # Refs #113: LiteCompatibleUUID, not plain UUID -- projects.id is a
+    # dashed-string TEXT column in lite mode (no ORM UUID coercion), and
+    # plain postgresql.UUID's SQLite bind encoding is hex-only, so a
+    # filter on this column (every route that takes project_id from the
+    # URL) silently matched nothing against the real, FK-valid data.
     project_id = Column(
-        UUID(as_uuid=True),
+        LiteCompatibleUUID(),
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
         index=True
