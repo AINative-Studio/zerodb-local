@@ -41,6 +41,13 @@ dependencies = [
     # `pip install -e '.[lite,dev]'` install lacked both.
     "requests>=2.28.0",
     "tenacity>=8.2.0",
+    # Refs #107: api/services/vector_service.py is imported unconditionally
+    # (it dispatches to FAISS or real Qdrant internally, there's no
+    # separate lite-mode module the way some other services have) and uses
+    # DBOS to make its SQL-then-Qdrant/FAISS two-system write resumable
+    # after a crash. Runs with zero extra setup in both modes -- SQLite by
+    # default, no Postgres requirement.
+    "dbos>=0.20.0",
 ]
 
 [project.optional-dependencies]

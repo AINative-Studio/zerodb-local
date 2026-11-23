@@ -518,6 +518,161 @@ class TestVectorsCRUD:
         )
 
 
+class TestVectorUpsertDurability:
+    """
+    Refs #107: VectorService.upsert_vector writes to the SQL `vectors`
+    table (committed first) and then to Qdrant/FAISS as a second,
+    previously-untransacted step -- a crash between the two left the SQL
+    row permanently committed while the vector silently never reached the
+    search index, with no error and no way to detect or repair the drift
+    short of a manual reconcile. api/services/vector_service.py now wraps
+    the Qdrant/FAISS write as a DBOS workflow so a crash there resumes
+    automatically the next time the server launches.
+
+    This test crashes the server process itself (not a mock) mid-upsert,
+    by pointing ZERODB_TEST_CRASH_ON_FAISS_UPSERT at a marker file the
+    real FAISSService.upsert_vector checks before doing its real work --
+    the only test-only hook touching production code, kept to a single
+    `if os.environ.get(...)` line gated behind a variable nothing else
+    ever sets, rather than reimplementing the crash via a second, fake
+    code path that wouldn't prove the real one works. Confirms: the SQL
+    row survives the crash (it was already committed), the server comes
+    back up on a second launch, DBOS resumes the interrupted workflow
+    with zero code in the request path doing anything special, and the
+    vector becomes searchable -- without the caller ever retrying the
+    original request.
+    """
+
+    @staticmethod
+    def _start_server(data_dir: str, port: int, extra_env: dict | None = None):
+        api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
+        env = dict(os.environ)
+        env["ZERODB_BACKEND"] = "lite"
+        env["TESTING"] = "true"
+        env["ZERODB_DATA_DIR"] = data_dir
+        env.pop("DATABASE_URL", None)
+        if extra_env:
+            env.update(extra_env)
+
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "uvicorn", "main:app",
+                "--host", "127.0.0.1", "--port", str(port),
+                "--log-level", "error",
+            ],
+            cwd=os.path.abspath(api_dir),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return proc
+
+    @staticmethod
+    def _wait_for_health(base_url: str, proc: subprocess.Popen, attempts: int = 50):
+        for _ in range(attempts):
+            if proc.poll() is not None:
+                pytest.fail(f"Lite server subprocess exited early with code {proc.returncode}")
+            try:
+                if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
+                    return
+            except httpx.TransportError:
+                time.sleep(0.2)
+        pytest.fail("Lite server did not start in time")
+
+    def test_upsert_resumes_the_faiss_write_after_a_crash(self, tmp_path_factory):
+        data_dir = str(tmp_path_factory.mktemp("zerodb_dbos_crash"))
+        crash_marker = os.path.join(data_dir, "crash_once.marker")
+        port = 18746
+
+        # Run 1: the server crashes the moment FAISSService.upsert_vector
+        # is called, so its own commit of the SQL `vectors` row already
+        # happened (that's step 2 of upsert_vector, before the Qdrant/
+        # FAISS step) but the FAISS write itself never completes.
+        proc = self._start_server(
+            data_dir, port,
+            extra_env={"ZERODB_TEST_CRASH_ON_FAISS_UPSERT": crash_marker},
+        )
+        try:
+            self._wait_for_health(f"http://127.0.0.1:{port}", proc)
+
+            project_id = httpx.post(
+                f"http://127.0.0.1:{port}/v1/projects",
+                json={"name": "dbos-crash-test", "description": ""},
+                timeout=10,
+            ).json()["id"]
+
+            # This request's connection drops because the server process
+            # itself dies mid-handling -- any transport-level exception is
+            # the expected outcome here, not a test failure.
+            try:
+                httpx.post(
+                    f"http://127.0.0.1:{port}/v1/projects/{project_id}/database/vectors/upsert",
+                    json={
+                        "document": "dbos durability marker unique phrase qzxyz",
+                        "namespace": "default",
+                        "metadata": {},
+                    },
+                    timeout=90,
+                )
+            except httpx.TransportError:
+                pass
+
+            for _ in range(50):
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail("server did not actually crash as expected")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+        assert os.path.exists(crash_marker), (
+            "the server never reached the FAISS upsert step at all -- this "
+            "test didn't exercise the crash path it's meant to"
+        )
+
+        # Run 2: relaunch against the SAME data dir (same DBOS checkpoint
+        # file, same SQLite vectors table) with no crash hook this time.
+        # DBOS.launch() in api/main.py's lifespan triggers its own
+        # automatic recovery of the interrupted workflow -- nothing in
+        # this test calls anything to make that happen.
+        proc2 = self._start_server(data_dir, port)
+        try:
+            self._wait_for_health(f"http://127.0.0.1:{port}", proc2)
+
+            # Give DBOS's background recovery a moment to actually finish
+            # resuming the workflow after the health check first responds.
+            for _ in range(50):
+                search_resp = httpx.post(
+                    f"http://127.0.0.1:{port}/v1/projects/{project_id}/database/vectors/search",
+                    json={
+                        "query": "dbos durability marker unique phrase qzxyz",
+                        "limit": 10,
+                        "threshold": 0.0,
+                    },
+                    timeout=30,
+                )
+                assert search_resp.status_code == 200, search_resp.text
+                if search_resp.json():
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail(
+                    "the vector was never searchable after the server "
+                    "restarted -- DBOS did not resume the interrupted "
+                    "FAISS upsert"
+                )
+        finally:
+            proc2.terminate()
+            try:
+                proc2.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc2.kill()
+                proc2.wait(timeout=5)
+
+
 class TestVectorDataDirIsolation:
     """
     Refs #88: `api/services/qdrant_service.py`'s module-level `qdrant_service`

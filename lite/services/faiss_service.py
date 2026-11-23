@@ -168,6 +168,19 @@ class FAISSService:
         Returns:
             True on success, False on error.
         """
+        # Test-only crash injection for Refs #107's DBOS crash-recovery
+        # test (tests/test_lite_mode_crud.py::TestVectorUpsertDurability)
+        # -- gated behind an env var nothing else ever sets, so this is a
+        # no-op outside that one test. Writes a marker file then exits
+        # hard (not a raised exception) to simulate the same kind of
+        # unrecoverable process death DBOS's recovery is meant to survive
+        # -- a try/except around the real call wouldn't exercise that.
+        _crash_marker = os.environ.get("ZERODB_TEST_CRASH_ON_FAISS_UPSERT")
+        if _crash_marker:
+            with open(_crash_marker, "w") as _f:
+                _f.write("crashed before the real FAISS upsert")
+            os._exit(1)
+
         if payload is None:
             payload = kwargs.get("metadata", {})
 
