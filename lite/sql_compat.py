@@ -23,11 +23,26 @@ Design notes:
   bound as a parameter instead of embedded in the SQL string.
 - SQLite has no native vector type; embeddings are stored as a JSON-encoded
   list of floats in a TEXT column (see memory_service.py / vector_service.py).
+
+Refs #63: in full mode, every INSERT/UPDATE/DELETE on vectors/table_rows/
+memory/events/files is logged into `change_log` automatically by PL/pgSQL
+triggers (api/db/migrations/001_initial_schema.sql, 003_change_detection.sql)
+so sync_orchestrator.py's CDC-based sync-plan query sees it for free. SQLite
+has no equivalent trigger support, so these 5 services must log the same
+change_log row explicitly in lite mode -- log_cdc_change() below does that,
+matching the triggers' exact entity_type ('vector', 'table_row', 'memory',
+'event', 'file' -- singular) and operation ('INSERT'/'UPDATE'/'DELETE') string
+contract that api/services/cdc_service.py's get_unsynced_changes() queries
+against, so a lite-mode write is indistinguishable from a full-mode one to
+the sync orchestrator.
 """
 import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from lite.config import is_lite_mode
 
@@ -177,3 +192,55 @@ def merge_json_text(existing: Any, update: Dict[str, Any]) -> str:
     else:
         merged = update
     return json.dumps(merged)
+
+
+def log_cdc_change(
+    db: Session,
+    project_id: Any,
+    entity_type: str,
+    entity_id: Any,
+    operation: str,
+    data: Any = None,
+) -> None:
+    """
+    Record a change_log row for lite mode, mirroring what a PL/pgSQL CDC
+    trigger does for free in full mode (see module docstring, Refs #63).
+
+    Only call this when is_lite_mode() is True -- full mode must NOT call
+    this, since its own triggers already log the same write; calling both
+    would double-log every change.
+
+    Args:
+        db: The same SQLAlchemy Session the caller's write used (so the
+            change_log row commits atomically with the write it describes).
+        project_id: Owning project UUID (str or UUID).
+        entity_type: Singular entity name matching the full-mode trigger
+            contract: one of 'vector', 'table_row', 'memory', 'event', 'file'.
+        entity_id: UUID of the row that changed (str or UUID).
+        operation: One of 'INSERT', 'UPDATE', 'DELETE' (matches change_log's
+            CHECK constraint in both schema_lite.sql and the Postgres schema).
+        data: The entity payload at the time of the change (dict, or a
+            pre-serialized JSON string); stored as-is if already a string.
+    """
+    if data is not None and not isinstance(data, str):
+        data = json.dumps(data, default=str)
+
+    db.execute(
+        text(
+            """
+            INSERT INTO change_log (id, project_id, entity_type, entity_id,
+                                     operation, data, timestamp, synced)
+            VALUES (:id, :project_id, :entity_type, :entity_id,
+                    :operation, :data, :timestamp, 0)
+            """
+        ),
+        {
+            "id": new_id(),
+            "project_id": str(project_id),
+            "entity_type": entity_type,
+            "entity_id": str(entity_id),
+            "operation": operation,
+            "data": data,
+            "timestamp": now_iso(),
+        },
+    )
