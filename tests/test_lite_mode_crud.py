@@ -519,6 +519,123 @@ class TestVectorsCRUD:
         assert delete_resp.status_code == 204, delete_resp.text
 
 
+class TestVectorDataDirIsolation:
+    """
+    Refs #88: `api/services/qdrant_service.py`'s module-level `qdrant_service`
+    singleton calls `FAISSService()` with no arguments in lite mode, which
+    defaults to `~/.zerodb/data` (`lite/services/faiss_service.py`'s
+    `__init__`). It never reads `lite.config.DATA_DIR` -- the same
+    ZERODB_DATA_DIR-derived constant `DatabaseServiceLite` (SQLite) and
+    everything else in the app correctly uses. So two independent
+    `zerodb serve --data-dir <X>` processes, each meant to be fully
+    isolated per the "local-first, this project's own data" design, instead
+    silently share ONE global FAISS vector store at `~/.zerodb/data`,
+    regardless of what `--data-dir` either was started with -- confirmed
+    live: a vector upserted against one `--data-dir` never produces a
+    `vectors.faiss`/`vectors_meta.json` file in that directory at all.
+
+    This test starts two real, separate lite-mode server subprocesses with
+    two distinct, disposable data directories (not the shared module-scoped
+    `lite_server` fixture, which only runs one server) and confirms a vector
+    upserted against server A is only ever searchable from server A, never
+    from server B.
+    """
+
+    @staticmethod
+    def _start_server(data_dir: str, port: int):
+        api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
+        env = dict(os.environ)
+        env["ZERODB_BACKEND"] = "lite"
+        env["TESTING"] = "true"
+        env["ZERODB_DATA_DIR"] = data_dir
+        env.pop("DATABASE_URL", None)
+
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "uvicorn", "main:app",
+                "--host", "127.0.0.1", "--port", str(port),
+                "--log-level", "error",
+            ],
+            cwd=os.path.abspath(api_dir),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        for _ in range(50):
+            if proc.poll() is not None:
+                pytest.fail(f"Lite server subprocess exited early with code {proc.returncode}")
+            try:
+                if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
+                    return proc, base_url
+            except httpx.ConnectError:
+                time.sleep(0.2)
+        pytest.fail("Lite server did not start in time")
+
+    def test_vector_data_isolated_between_two_data_dirs(self, tmp_path_factory):
+        data_dir_a = str(tmp_path_factory.mktemp("zerodb_isolation_a"))
+        data_dir_b = str(tmp_path_factory.mktemp("zerodb_isolation_b"))
+
+        proc_a, url_a = self._start_server(data_dir_a, 18744)
+        try:
+            proc_b, url_b = self._start_server(data_dir_b, 18745)
+            try:
+                project_a = httpx.post(
+                    f"{url_a}/v1/projects",
+                    json={"name": "isolation-test-a", "description": ""},
+                    timeout=10,
+                ).json()["id"]
+                project_b = httpx.post(
+                    f"{url_b}/v1/projects",
+                    json={"name": "isolation-test-b", "description": ""},
+                    timeout=10,
+                ).json()["id"]
+
+                upsert_resp = httpx.post(
+                    f"{url_a}/v1/projects/{project_a}/database/vectors/upsert",
+                    json={"document": "isolation marker unique phrase xyzzy", "namespace": "default", "metadata": {}},
+                    timeout=90,
+                )
+                assert upsert_resp.status_code == 200, upsert_resp.text
+
+                # The FAISS index/metadata files must land under THIS
+                # server's own --data-dir, not the global ~/.zerodb/data
+                # default.
+                assert os.path.exists(os.path.join(data_dir_a, "vectors.faiss")), (
+                    "Server A's FAISS index was not written to its own --data-dir -- "
+                    "the shared qdrant_service singleton is still using the hardcoded "
+                    "~/.zerodb/data default instead of this server's configured data dir."
+                )
+
+                # Server B (different --data-dir, different process) must
+                # NOT see server A's vector via search.
+                search_b = httpx.post(
+                    f"{url_b}/v1/projects/{project_b}/database/vectors/search",
+                    json={"query": "isolation marker unique phrase xyzzy", "limit": 10, "threshold": 0.0},
+                    timeout=30,
+                )
+                assert search_b.status_code == 200, search_b.text
+                assert search_b.json() == [], (
+                    "Server B found a vector that was only ever upserted against "
+                    "server A's --data-dir -- the two servers are sharing one global "
+                    "FAISS index instead of being isolated per --data-dir."
+                )
+            finally:
+                proc_b.terminate()
+                try:
+                    proc_b.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc_b.kill()
+                    proc_b.wait(timeout=5)
+        finally:
+            proc_a.terminate()
+            try:
+                proc_a.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc_a.kill()
+                proc_a.wait(timeout=5)
+
+
 class TestEventsCRUD:
     """Refs #47: events_service hardcoded CAST(... AS jsonb) and crashed on
     .isoformat() against SQLite's string timestamps."""
