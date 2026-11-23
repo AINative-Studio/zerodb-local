@@ -18,15 +18,37 @@ const config = {
       },
     },
     extend: {
+      fontFamily: {
+        // Self-hosted via @fontsource-variable (see app/layout.tsx), so the
+        // dashboard renders correctly with no network -- it's a local tool.
+        display: ['"Space Grotesk Variable"', 'system-ui', 'sans-serif'],
+        sans: ['"Inter Variable"', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono Variable"', 'ui-monospace', 'monospace'],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        sidebar: "hsl(var(--sidebar))",
+        link: "hsl(var(--link))",
+        overlay: "hsl(var(--overlay))",
+        terminal: {
+          DEFAULT: "hsl(var(--terminal))",
+          foreground: "hsl(var(--terminal-foreground))",
+        },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          muted: "hsl(var(--success-muted))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          muted: "hsl(var(--warning-muted))",
+        },
         primary: {
           DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--foreground))",
+          foreground: "hsl(var(--primary-foreground))",
         },
         secondary: {
           DEFAULT: "hsl(var(--secondary))",
@@ -51,6 +73,20 @@ const config = {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
+        },
+        // Signal Cyan scale from the ZeroDB brand system. Fills and accents
+        // only -- below 600 it fails contrast as text on white.
+        cyan: {
+          50: '#F0F9FF',
+          100: '#E0F2FE',
+          200: '#BAE6FD',
+          300: '#7DD3FC',
+          400: '#38BDF8',
+          500: '#0EA5E9',
+          600: '#0284C7',
+          700: '#0369A1',
+          800: '#075985',
+          900: '#0C4A6E',
         },
       },
       borderRadius: {

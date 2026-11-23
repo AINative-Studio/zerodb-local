@@ -1,51 +1,160 @@
 # ZeroDB Local
 
-Run ZeroDB on your local machine. Two modes available:
-- **Lite mode** (recommended) — pip install, no Docker required
-- **Full mode** — Docker Compose with PostgreSQL, Qdrant, MinIO, RedPanda
+Run ZeroDB on your own machine: vectors, tables, agent memory, files and events behind the same API as ZeroDB Cloud, plus a web dashboard to manage it all.
 
-## Quick Start — Lite Mode (No Docker)
+Two ways to run it:
+- **Lite mode** (recommended to start): `pip install`, no Docker. SQLite + FAISS + local files.
+- **Full mode**: Docker Compose with PostgreSQL, Qdrant, MinIO and RedPanda.
+
+**At a glance**
+
+| | Lite mode | Full mode (Docker) |
+|---|---|---|
+| API | http://localhost:8000 | http://localhost:8000 |
+| API docs | http://localhost:8000/docs | http://localhost:8000/docs |
+| Dashboard | http://localhost:3000 (run it yourself, below) | http://localhost:3000 (starts with Compose) |
+| Sign-in | None by default (optional access key) | None by default (optional access key) |
+| Reachable from | This machine only, by default | This machine only, by default |
+| Data | `~/.zerodb/data/` | Docker volumes |
+
+---
+
+## Quick start: lite mode (no Docker)
+
+**Needs:** Python 3.11+. For the dashboard, also Node.js 20+.
+
+### 1. Start the API
 
 ```bash
-pip install zerodb-local[lite]
+pip install "zerodb-local[lite]"
 zerodb serve
 ```
 
-That's it. Server starts at `http://localhost:8000` with:
+The API is now at **http://localhost:8000**, with:
 - SQLite database
 - FAISS vector search
-- In-process embeddings (BAAI/bge-small-en-v1.5, 384 dims)
+- In-process embeddings (BAAI/bge-small-en-v1.5, 384 dims). The model downloads once on first use (~130 MB), so the first vector upsert takes a little longer.
 - Local filesystem storage
 - SQLite event queue
 
-### Verify it works
+Check it:
 
 ```bash
-# Health check
 curl http://localhost:8000/health
-
-# Create a project
-curl -X POST http://localhost:8000/v1/projects \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-project", "description": "Testing ZeroDB Local"}'
 ```
 
-### CLI Options
+### 2. Start the dashboard
+
+The dashboard ships in this repo (it isn't part of the pip package):
 
 ```bash
-zerodb serve                        # Start on port 8000
-zerodb serve --port 9000            # Custom port
-zerodb serve --data-dir /my/data    # Custom data directory
-zerodb serve --cloud-key sk_...     # Enable cloud sync
+git clone https://github.com/AINative-Studio/zerodb-local.git
+cd zerodb-local/dashboard
+cp .env.example .env.local      # points the dashboard at http://localhost:8000
+npm ci
+npm run dev
 ```
 
-Data is stored at `~/.zerodb/data/` by default.
+Open **http://localhost:3000**. Use `localhost`, not `127.0.0.1`: the API only accepts browser requests from `http://localhost:3000` by default (set `CORS_ORIGINS` on the API to change that).
+
+From there you can do everything without the CLI or curl: create a project, add vectors and tables, store agent memory, upload files, publish events and sync to the cloud.
+
+### Options
+
+```bash
+zerodb serve --port 9000                         # different API port
+zerodb serve --host 0.0.0.0                      # reachable from your network (set a key, below)
+ZERODB_DATA_DIR=/my/data zerodb serve            # different data folder
+CLOUD_API_KEY=sk_... zerodb serve                # enable cloud sync
+```
+
+If you change the API port, set `NEXT_PUBLIC_API_URL` in `dashboard/.env.local` to match and restart `npm run dev`.
+
+When running from a source checkout, `zerodb serve` also accepts `--data-dir` and `--cloud-key`.
+
+---
+
+## Sign-in, users and default passwords
+
+ZeroDB Local is built for one developer on their own machine, so **there's no login, no user account to create and no password**, in either mode. Instead it's safe by default because **it only accepts connections from this machine** (`127.0.0.1`). Teams, sign-in and sharing are what [ZeroDB Cloud](https://zerodb.ainative.studio) is for.
+
+Every request acts as one built-in local user:
+
+| Setting | Default | Override with |
+|---|---|---|
+| User ID | `00000000-0000-0000-0000-000000000001` | `ZERODB_USER_ID` |
+| Email | `dev@localhost` | `ZERODB_USER_EMAIL` |
+| Username | `local-developer` | `ZERODB_USERNAME` |
+
+### Opening it up to other machines
+
+If you want to reach ZeroDB Local from another machine (a teammate, a VM, a home server), set a **local access key** at the same time. Then every request must send it as `Authorization: Bearer <key>`; in the dashboard, paste it once in **Settings › Connection**.
+
+```bash
+# Lite mode
+ZERODB_LOCAL_API_KEY="$(openssl rand -hex 24)" zerodb serve --host 0.0.0.0
+
+# Full mode: in .env           ZERODB_BIND_ADDRESS=0.0.0.0
+#            in .env.local     ZERODB_LOCAL_API_KEY=<a long random string>
+```
+
+`zerodb serve` prints a warning if you listen on the network without a key. `/health` stays open so tools can check the server is up.
+
+To require ZeroDB Cloud API keys instead of one shared key, set `ZERODB_AUTH_MODE=cloud`.
+
+### Default service credentials (full mode only)
+
+These are for the Docker containers, not for logging in to the dashboard. Their ports are only published on `127.0.0.1`, but change them in `.env.local` before opening anything up:
+
+| Service | Username | Password |
+|---|---|---|
+| PostgreSQL (`localhost:5432`, db `zerodb_local`) | `zerodb` | `localpass` |
+| MinIO console (http://localhost:9001) | `minioadmin` | `minioadmin` |
+
+> **Don't forward these ports to the internet.** Even with an access key, ZeroDB Local isn't hardened as a public server; use ZeroDB Cloud for that.
+
+---
+
+## Ports
+
+| Port | What | Mode | Change with |
+|---|---|---|---|
+| **8000** | ZeroDB API (+ `/docs`, `/health`) | both | `zerodb serve --port`, or `ZERODB_API_PORT` in `.env` |
+| **3000** | Dashboard | both | `npm run dev -- -p <port>`, or `ZERODB_DASHBOARD_PORT` in `.env` |
+| 8001 | Embeddings service | full | `ZERODB_EMBEDDINGS_PORT` |
+| 5432 | PostgreSQL | full | `ZERODB_POSTGRES_PORT` |
+| 6333 / 6334 | Qdrant REST / gRPC | full | `ZERODB_QDRANT_REST_PORT` / `ZERODB_QDRANT_GRPC_PORT` |
+| 9000 / 9001 | MinIO API / console | full | `ZERODB_MINIO_API_PORT` / `ZERODB_MINIO_CONSOLE_PORT` |
+| 9092 / 8082 / 9644 | RedPanda Kafka / proxy / admin | full | `ZERODB_REDPANDA_*_PORT` |
+
+In full mode, ports and `ZERODB_BIND_ADDRESS` go in a `.env` file next to `docker-compose.yml` (copy `.env.example`); Docker Compose doesn't read them from `.env.local`. Every port is published on `127.0.0.1` unless you set `ZERODB_BIND_ADDRESS=0.0.0.0`.
+
+If you move the dashboard to another port, add it to the API's `CORS_ORIGINS` (comma-separated).
+
+---
+
+## The dashboard
+
+| Page | What you can do |
+|---|---|
+| Overview | See which backend is running (lite/full) and its health, totals across projects, your API endpoint, recent activity |
+| Projects | Create, search and delete projects. Everything else lives inside a project |
+| Vectors | Upsert text (embedded for you, free), search by meaning, filter by namespace, delete |
+| Tables | Create tables with a column builder or a JSON schema, add rows, browse, delete |
+| Memory | Browse agent conversations by session, search memory by meaning, add or delete memories |
+| Files | Upload (drag and drop), download, delete |
+| Events | Live feed filtered by type, event details, publish test events |
+| Sync | See what's waiting, preview a push/pull plan, run it, resolve conflicts, view history |
+| Logs | Live server logs with level, service and time filters; export |
+| Settings | Light/dark/system theme, server details, API key, create-form defaults, cloud connection |
+
+Every create form opens in a guided mode with plain-language fields, with an **Advanced JSON** switch that shows the exact API request.
 
 ## Features
 
 - **Two backends**: Lite (SQLite + FAISS) or Full (PostgreSQL + Qdrant + Docker)
-- **Local API Server**: Mirrors all 128 ZeroDB Cloud endpoints
-- **Web Dashboard**: Manage projects, vectors, tables, files, and events via UI
+- **Local API Server**: Mirrors the ZeroDB Cloud API
+- **Web Dashboard**: Manage projects, vectors, tables, memory, files, events and sync via UI
 - **CLI Tool**: `zerodb` command for local control and cloud sync
 - **Offline-First**: Work without internet, sync when ready
 - **No API Costs**: Local embeddings using BAAI BGE models (free)
@@ -71,14 +180,15 @@ For production-like environments with PostgreSQL, Qdrant, MinIO, and RedPanda.
    cd zerodb-local
    ```
 
-2. **Copy environment template**:
+2. **Copy the environment templates** (both optional; every value has a default):
    ```bash
-   cp .env.local.example .env.local
+   cp .env.example .env               # ports and bind address (read by Compose)
+   cp .env.local.example .env.local   # service settings (read by the containers)
    ```
 
 3. **Edit `.env.local`** (optional):
-   - Update `POSTGRES_PASSWORD` for production use
    - Set `CLOUD_API_KEY` if you want cloud sync
+   - Change `POSTGRES_PASSWORD` and the MinIO keys from their defaults
    - Adjust `EMBEDDINGS_MODEL` based on your needs
 
 4. **Start all services**:
@@ -101,7 +211,7 @@ For production-like environments with PostgreSQL, Qdrant, MinIO, and RedPanda.
    - `zerodb-dashboard` (Web UI)
 
 6. **Access the dashboard**:
-   - Open http://localhost:3000 in your browser
+   - Open http://localhost:3000 in your browser. No login needed.
 
 7. **Check API health**:
    ```bash
@@ -189,8 +299,8 @@ For production-like environments with PostgreSQL, Qdrant, MinIO, and RedPanda.
 
 ### Dashboard (Port 3000)
 - **Purpose**: Web UI for local management
-- **Framework**: React 18 + TypeScript + Vite
-- **Features**: Projects, vectors, tables, files, events, sync
+- **Framework**: Next.js 14 (App Router) + React 18 + TypeScript + Tailwind
+- **Features**: Projects, vectors, tables, memory, files, events, sync, logs, settings (see [The dashboard](#the-dashboard))
 
 ## Usage Examples
 
@@ -204,26 +314,43 @@ curl -X POST http://localhost:8000/v1/projects \
   }'
 ```
 
+No auth header is needed by default. If the server has a local access key, add `-H "Authorization: Bearer $ZERODB_LOCAL_API_KEY"` to each request.
+
 ### Upsert a Vector
+The API embeds `document` for you (free, local model). Reusing a `vector_id` replaces that vector.
 ```bash
 curl -X POST http://localhost:8000/v1/projects/{project_id}/database/vectors/upsert \
   -H "Content-Type: application/json" \
   -d '{
-    "vector_embedding": [0.1, 0.2, 0.3, ...],
-    "document": "This is my document",
-    "metadata": {"source": "local-test"}
+    "document": "Refunds are issued within 5 business days.",
+    "namespace": "faq",
+    "vector_id": "faq-refunds",
+    "metadata": {"topic": "billing"}
   }'
 ```
 
 ### Search Vectors
+Search by meaning with plain text:
 ```bash
 curl -X POST http://localhost:8000/v1/projects/{project_id}/database/vectors/search \
   -H "Content-Type: application/json" \
   -d '{
-    "query_vector": [0.1, 0.2, 0.3, ...],
+    "query": "how long do refunds take",
+    "namespace": "faq",
     "limit": 10,
-    "threshold": 0.7
+    "threshold": 0.3
   }'
+```
+
+### Store and recall agent memory
+```bash
+curl -X POST http://localhost:8000/v1/projects/{project_id}/database/memory/store \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Prefers annual billing", "role": "user", "agent_id": "support", "session_id": "chat-42"}'
+
+curl -X POST http://localhost:8000/v1/projects/{project_id}/database/memory/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "billing preference", "agent_id": "support"}'
 ```
 
 ## CLI Tool
@@ -284,7 +411,7 @@ docker-compose up -d
 ### Hot Reload API
 ```bash
 cd api
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Hot Reload Dashboard
@@ -295,8 +422,15 @@ npm run dev
 
 ### Run Tests
 ```bash
+# API
 cd api
 pytest tests/ -v --cov
+
+# Dashboard
+cd dashboard
+npm test              # unit + page tests (Vitest)
+npm run type-check
+npm run lint
 ```
 
 ## Troubleshooting
@@ -312,6 +446,17 @@ docker-compose restart zerodb-api
 # Full reset
 docker-compose down -v && docker-compose up -d
 ```
+
+### Dashboard shows "This server needs an API key"
+The API has `ZERODB_LOCAL_API_KEY` set (or `ZERODB_AUTH_MODE=cloud`). Paste that key in **Settings › Connection**.
+
+### Can't reach ZeroDB Local from another machine
+That's the default: it only accepts connections from this machine. See [Opening it up to other machines](#opening-it-up-to-other-machines).
+
+### Dashboard can't reach the API
+- Is the API running? `curl http://localhost:8000/health`
+- Open the dashboard at `http://localhost:3000`, not `127.0.0.1` (CORS)
+- Changed the API port? Update `NEXT_PUBLIC_API_URL` in `dashboard/.env.local` (or rebuild the Docker dashboard image)
 
 ### Port conflicts
 ```bash
@@ -363,6 +508,9 @@ docker-compose exec postgres psql -U zerodb -d zerodb_local
    ```
 
 ### Sync Workflow
+In the dashboard: **Sync** page → choose Push / Pull / Both → **Preview sync** → review → **Run sync**.
+
+From the CLI:
 ```bash
 # 1. Make changes locally (add vectors, tables, etc.)
 
@@ -377,15 +525,18 @@ zerodb cloud pull
 ```
 
 ### Conflict Resolution
-Configure in `.env.local`:
+In the dashboard, choose the rule on the **Sync** page before previewing. For the CLI, configure in `.env.local`:
 ```
 CONFLICT_RESOLUTION=newest-wins  # local-wins, cloud-wins, newest-wins, manual
 ```
 
 ## Environment Variables Reference
 
-See `.env.local.example` for complete list. Key variables:
+See `.env.example` (ports, bind address) and `.env.local.example` (everything else) for the complete list. Key variables:
 
+- `ZERODB_LOCAL_API_KEY` - Optional shared key; when set, every request needs `Authorization: Bearer <key>`
+- `ZERODB_AUTH_MODE` - `local` (default, no login) or `cloud` (ZeroDB Cloud API keys)
+- `ZERODB_BIND_ADDRESS` - In `.env`: `127.0.0.1` (default, this machine only) or `0.0.0.0`
 - `POSTGRES_PASSWORD` - Database password (change in production!)
 - `CLOUD_API_KEY` - Your ZeroDB Cloud API key for sync
 - `EMBEDDINGS_MODEL` - Model to use (small/base/large)

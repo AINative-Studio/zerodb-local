@@ -1,5 +1,8 @@
 version: '3.8'
 
+# Ports are published on 127.0.0.1 (this machine only) by default. To reach
+# them from other machines set ZERODB_BIND_ADDRESS=0.0.0.0 in .env, and set
+# ZERODB_LOCAL_API_KEY in .env.local so the API requires a key.
 services:
   # PostgreSQL with pgvector extension for vector storage
   postgres:
@@ -19,7 +22,7 @@ services:
       - ./api/db/migrations:/docker-entrypoint-initdb.d/migrations
       - ./api/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     ports:
-      - "${ZERODB_POSTGRES_PORT:-5432}:5432"
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_POSTGRES_PORT:-5432}:5432"
     networks:
       - zerodb-network
     healthcheck:
@@ -39,8 +42,8 @@ services:
     volumes:
       - ./data/qdrant:/qdrant/storage
     ports:
-      - "${ZERODB_QDRANT_REST_PORT:-6333}:6333"  # REST API
-      - "${ZERODB_QDRANT_GRPC_PORT:-6334}:6334"  # gRPC API
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_QDRANT_REST_PORT:-6333}:6333"  # REST API
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_QDRANT_GRPC_PORT:-6334}:6334"  # gRPC API
     networks:
       - zerodb-network
     environment:
@@ -66,8 +69,8 @@ services:
     volumes:
       - ./data/minio:/data
     ports:
-      - "${ZERODB_MINIO_API_PORT:-9000}:9000"  # API
-      - "${ZERODB_MINIO_CONSOLE_PORT:-9001}:9001"  # Console
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_MINIO_API_PORT:-9000}:9000"  # API
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_MINIO_CONSOLE_PORT:-9001}:9001"  # Console
     networks:
       - zerodb-network
     healthcheck:
@@ -116,9 +119,9 @@ services:
       # A named volume lives on the Linux VM's real filesystem instead.
       - redpanda-data:/var/lib/redpanda/data
     ports:
-      - "${ZERODB_REDPANDA_KAFKA_PORT:-9092}:9092"   # Kafka API
-      - "${ZERODB_REDPANDA_PROXY_PORT:-8082}:8082"   # HTTP Proxy
-      - "${ZERODB_REDPANDA_ADMIN_PORT:-9644}:9644"   # Admin API
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_REDPANDA_KAFKA_PORT:-9092}:9092"   # Kafka API
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_REDPANDA_PROXY_PORT:-8082}:8082"   # HTTP Proxy
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_REDPANDA_ADMIN_PORT:-9644}:9644"   # Admin API
     networks:
       - zerodb-network
     healthcheck:
@@ -144,7 +147,7 @@ services:
     volumes:
       - ./data/embeddings/models:/app/models
     ports:
-      - "${ZERODB_EMBEDDINGS_PORT:-8001}:8001"
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_EMBEDDINGS_PORT:-8001}:8001"
     networks:
       - zerodb-network
     healthcheck:
@@ -202,16 +205,13 @@ services:
       CLOUD_API_URL: ${CLOUD_API_URL:-https://api.ainative.studio}
       CLOUD_API_KEY: ${CLOUD_API_KEY:-}
 
-      # Authentication — "cloud" syncs with your AINative account, "local" for
-      # offline dev. Deliberately NOT interpolated as ${ZERODB_AUTH_MODE:-cloud}
-      # here: Compose's ${VAR} interpolation only ever reads the shell env or
-      # the top-level .env file, never a service's own env_file: entry — so a
-      # value set in .env.local (this repo's documented convention) was always
-      # silently overridden back to "cloud" by this line's own fallback,
-      # regardless of env_file: above. Omitting the key entirely lets
-      # env_file:'s real value pass through untouched; when .env.local doesn't
-      # set it either, api/auth.py's own os.getenv("ZERODB_AUTH_MODE", "cloud")
-      # default takes over with the identical net result. Refs #37.
+      # Sign-in. api/auth.py defaults to ZERODB_AUTH_MODE=local (no login,
+      # one built-in user); set ZERODB_AUTH_MODE=cloud in .env.local to
+      # require a ZeroDB API key, or ZERODB_LOCAL_API_KEY to require one
+      # shared key. Both come through env_file: above. Deliberately NOT
+      # written as ${ZERODB_AUTH_MODE:-...} here: Compose interpolation only
+      # reads the shell env or the top-level .env, never env_file:, so a
+      # fallback on this line would silently override .env.local. Refs #37.
 
       # Environment
       ZERODB_ENV: ${ZERODB_ENV:-local}
@@ -220,7 +220,7 @@ services:
       - ./api:/app
       - ./lite:/app/lite
     ports:
-      - "${ZERODB_API_PORT:-8000}:8000"
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_API_PORT:-8000}:8000"
     networks:
       - zerodb-network
     healthcheck:
@@ -230,11 +230,17 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ZeroDB Local Dashboard (React UI)
+  # ZeroDB Local Dashboard (Next.js UI)
   dashboard:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        # The browser calls the API directly, and Next.js bakes NEXT_PUBLIC_*
+        # into the client bundle at build time -- so this must be a build
+        # arg, not a runtime env var. Rebuild the dashboard image after
+        # changing ZERODB_API_PORT.
+        NEXT_PUBLIC_API_URL: http://localhost:${ZERODB_API_PORT:-8000}
     container_name: zerodb-dashboard
     depends_on:
       zerodb-api:
@@ -243,10 +249,10 @@ services:
       - path: .env.local
         required: false
     environment:
-      VITE_API_URL: http://localhost:${ZERODB_API_PORT:-8000}
-      VITE_API_INTERNAL_URL: http://zerodb-api:8000
+      # Server-side requests (during render) go over the Docker network.
+      API_INTERNAL_URL: http://zerodb-api:8000
     ports:
-      - "${ZERODB_DASHBOARD_PORT:-3000}:3000"
+      - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_DASHBOARD_PORT:-3000}:3000"
     networks:
       - zerodb-network
     restart: unless-stopped

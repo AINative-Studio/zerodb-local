@@ -18,7 +18,10 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy all files
 COPY . .
 
-# Build Next.js application
+# Build Next.js application. NEXT_PUBLIC_API_URL is baked into the client
+# bundle here (see docker-compose.yml).
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED 1
 RUN npm run build
 
