@@ -4,9 +4,11 @@ Tracks all conflicts detected during sync and their resolutions
 """
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import Column, String, DateTime, Text
+from sqlalchemy import Column, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
+
+from models.types import LiteCompatibleDateTime as DateTime
 
 Base = declarative_base()
 

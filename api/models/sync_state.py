@@ -4,10 +4,12 @@ Tracks synchronization state for each entity type per project
 """
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy import Column, String, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+
+from models.types import LiteCompatibleDateTime as DateTime
 
 Base = declarative_base()
 
