@@ -517,6 +517,65 @@ class TestVectorsCRUD:
             "every namespace, not silently default to namespace='default'"
         )
 
+    def test_search_with_no_namespace_filter_returns_all_namespaces(self, lite_server, project_id):
+        """
+        Refs #111: the same bug as test_list_vectors_with_no_namespace_
+        filter_returns_all_namespaces above, but in POST /vectors/search
+        instead of GET /vectors -- found during a deep UI testing pass:
+        the dashboard's Vectors page search box, with the namespace filter
+        left blank ("All namespaces"), returned "No matches" for a vector's
+        own exact document text, even at threshold=0.0. Confirmed directly:
+        the request body omits "namespace" entirely when the dashboard's
+        namespace field is empty, and VectorSearch's schema (api/routers/
+        vectors.py) defaulted the omitted field to the literal string
+        "default", not None -- indistinguishable from actually asking to
+        search only namespace="default", unlike an explicit namespace=null
+        in the body, which already correctly matched every namespace.
+        """
+        upsert_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
+            json={
+                "document": "our refund policy allows returns within 30 days",
+                "namespace": "faq",
+                "metadata": {},
+            },
+            timeout=90,
+        )
+        assert upsert_resp.status_code == 200, upsert_resp.text
+        vector_id = upsert_resp.json()["id"]
+
+        # Sanity: explicitly filtering by the real namespace finds it.
+        filtered = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/search",
+            json={"query": "refund policy", "threshold": 0.0, "namespace": "faq"},
+            timeout=90,
+        )
+        assert filtered.status_code == 200, filtered.text
+        assert any(v["id"] == vector_id for v in filtered.json())
+
+        # The actual bug: omitting namespace entirely (the dashboard's "All
+        # namespaces" state) must also find it, not silently filter to
+        # "default" and hide every other namespace's vectors.
+        unfiltered = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/search",
+            json={"query": "refund policy", "threshold": 0.0},
+            timeout=90,
+        )
+        assert unfiltered.status_code == 200, unfiltered.text
+        assert any(v["id"] == vector_id for v in unfiltered.json()), (
+            "POST /vectors/search with no namespace field must search every "
+            "namespace, not silently default to namespace='default'"
+        )
+
+        # And an explicit null must behave identically to omitting it.
+        explicit_null = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/search",
+            json={"query": "refund policy", "threshold": 0.0, "namespace": None},
+            timeout=90,
+        )
+        assert explicit_null.status_code == 200, explicit_null.text
+        assert any(v["id"] == vector_id for v in explicit_null.json())
+
 
 class TestVectorUpsertDurability:
     """
