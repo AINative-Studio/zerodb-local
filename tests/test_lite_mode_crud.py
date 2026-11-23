@@ -18,6 +18,11 @@ import time
 import pytest
 import httpx
 
+# Populated by the lite_server fixture below with the data dir it started
+# the subprocess server against, so lite_server_db_path can locate the
+# same on-disk SQLite file without re-deriving ZERODB_DATA_DIR itself.
+_lite_server_data_dir: dict = {}
+
 
 @pytest.fixture(scope="module")
 def lite_server(tmp_path_factory):
@@ -39,6 +44,7 @@ def lite_server(tmp_path_factory):
     ran earlier in the same CI job -- independent of test file order.
     """
     data_dir = tmp_path_factory.mktemp("zerodb_crud_data")
+    _lite_server_data_dir["path"] = str(data_dir)
     api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
     port = 18743  # distinct from test_integration_lite.py's 18742
 
@@ -84,6 +90,14 @@ def lite_server(tmp_path_factory):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def lite_server_db_path(lite_server):
+    """Absolute path to the lite_server's on-disk SQLite file, derived the
+    same way lite/services/database_service_lite.py does (ZERODB_DATA_DIR
+    plus 'zerodb.db'), for tests that need to inspect/seed it directly."""
+    return os.path.join(_lite_server_data_dir["path"], "zerodb.db")
 
 
 @pytest.fixture()
@@ -727,3 +741,99 @@ class TestSyncPlanWithSchemaComparison:
             timeout=15,
         )
         assert plan_resp.status_code == 200, plan_resp.text
+
+
+class TestSyncStatusAndHistory:
+    """Refs #73: the Sync page's two read endpoints against a fresh lite
+    database. api/models/sync_history.py's SyncHistory ORM model declares
+    sync_id/direction/mode/bytes_transferred/error_message/error_stack/
+    snapshot_id/updated_at (matching the full/Postgres schema), but
+    lite/db/schema_lite.sql's sync_history table only had the older,
+    simpler shape (sync_direction/sync_mode/errors, no sync_id) -- any ORM
+    query against sync_history in lite mode hit a column mismatch.
+    sync_state's lite schema already matched the ORM model 1:1, so only
+    sync_history needed a schema fix."""
+
+    def test_sync_status_on_fresh_project(self, lite_server, project_id):
+        """GET /sync/status must not 503 on a brand new project with no
+        sync activity yet."""
+        resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/sync/status",
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["project_id"] == project_id
+        assert body["entity_sync_states"] == {}
+
+    def test_sync_history_on_fresh_project(self, lite_server, project_id):
+        """GET /sync/history must not 503 on a brand new project with no
+        sync history yet -- this is the endpoint that hit
+        'no such column: sync_history.sync_id'."""
+        resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/sync/history",
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["items"] == []
+
+    def test_sync_history_round_trips_a_real_entry(
+        self, lite_server, lite_server_db_path, project_id
+    ):
+        """Write a real row directly into the running server's on-disk
+        SQLite file (raw sqlite3, no ORM/mocks -- deliberately avoiding an
+        in-process `database.py`/`lite.config` import, since those modules
+        compute ZERODB_BACKEND/ZERODB_DATA_DIR at import time and would
+        silently diverge from the subprocess server's env per the
+        `lite_server` fixture's docstring), then read it back over the
+        real HTTP endpoint -- confirms sync_id (and the other columns the
+        full-mode ORM model expects: direction, mode, bytes_transferred,
+        error_message, snapshot_id, updated_at) actually round-trip, not
+        just that an empty-list query succeeds.
+
+        Not driven through POST /sync/execute: execute's only path to a
+        sync_plan currently needs the sync_plans table, which
+        lite/db/schema_lite.sql does not define at all -- a separate,
+        larger gap than this issue (#73) covers. See the
+        DASHBOARD_REDESIGN.md follow-ups note for that gap.
+
+        UUID columns use SQLAlchemy's `postgresql.UUID(as_uuid=True)` type
+        (shared with the full-mode model), which on the SQLite dialect
+        binds/compares values as 32-char dash-less hex -- not the dashed
+        str(uuid.UUID) form. The raw insert below stores ids the same way
+        the ORM actually would, so the read-back through the real
+        project_id-filtered endpoint exercises the real storage format.
+        """
+        import sqlite3
+        import uuid as uuid_mod
+
+        sync_id = uuid_mod.uuid4()
+        conn = sqlite3.connect(lite_server_db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO sync_history
+                    (id, project_id, sync_id, direction, mode, status,
+                     records_synced, bytes_transferred)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid_mod.uuid4().hex, uuid_mod.UUID(project_id).hex,
+                    sync_id.hex, "push", "full", "completed", "{}", 0,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        history_resp = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/sync/history",
+            timeout=10,
+        )
+        assert history_resp.status_code == 200, history_resp.text
+        items = history_resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["sync_id"] == str(sync_id)
+        assert items[0]["direction"] == "push"
+        assert items[0]["mode"] == "full"
