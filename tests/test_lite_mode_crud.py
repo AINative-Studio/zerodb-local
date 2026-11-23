@@ -340,6 +340,213 @@ class TestVectorsCRUD:
         )
         assert get_after_delete.status_code == 404
 
+    def test_search_does_not_crash_when_shared_index_contains_a_memory_payload(self, lite_server, project_id):
+        """
+        Dashboard redesign e2e verification (docs/features/DASHBOARD_REDESIGN.md)
+        caught this live, reproducibly, with a BRAND NEW vector immediately
+        after upsert: Vectors and Memory share one underlying FAISS
+        index/metadata store in lite mode (api/services/qdrant_service.py's
+        module-level `qdrant_service` singleton resolves to one shared
+        FAISSService for both features). Vectors write payload["document"];
+        Memory writes payload["content"] with no "document" key at all. The
+        vectors search endpoint's VectorSearchResult schema requires
+        `document: str` (non-optional) and does `payload.get("document")`
+        on every FAISS-ranked candidate -- so once the shared index contains
+        even one memory-shaped entry, any vector search whose over-fetch
+        ranks that entry into the candidate set 500s the ENTIRE response,
+        rather than just skipping that one non-vector hit. Refs #87.
+        """
+        # Store a memory first -- this writes a payload shape with no
+        # "document" key into the SAME shared FAISS index vectors search
+        # reads from.
+        memory_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/memory/store",
+            json={"content": "the quick brown fox memory", "role": "user", "agent_id": "default"},
+            timeout=90,
+        )
+        assert memory_resp.status_code == 200, memory_resp.text
+
+        upsert_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
+            json={"document": "the quick brown fox vector", "namespace": "default", "metadata": {}},
+            timeout=90,
+        )
+        assert upsert_resp.status_code == 200, upsert_resp.text
+
+        search_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/search",
+            json={"query": "quick brown fox", "limit": 10, "threshold": 0.0},
+            timeout=30,
+        )
+        assert search_resp.status_code == 200, (
+            f"Vector search must not 500 when the shared FAISS index also "
+            f"contains memory-shaped payloads: {search_resp.text}"
+        )
+
+    def test_list_vectors_with_no_namespace_filter_returns_all_namespaces(self, lite_server, project_id):
+        """
+        Dashboard redesign e2e verification (docs/features/DASHBOARD_REDESIGN.md)
+        caught this live: the dashboard's Vectors page has an "All namespaces"
+        filter that, when empty, is meant to omit the namespace param entirely
+        -- GET /vectors with no namespace query param should return vectors
+        from every namespace in the project, not just "default". Confirmed
+        live: a vector upserted into namespace "faq" was correctly stored and
+        directly retrievable (?namespace=faq, or by ID), but GET /vectors with
+        no namespace param at all came back empty -- because the router
+        declares `namespace: str = "default"`, so an omitted param silently
+        becomes the literal string "default" rather than "no filter", and the
+        underlying SQL always has `AND namespace = :namespace` with no
+        no-filter branch. The project's own usage counter correctly showed
+        vectors=1, proving the data was there and only the list query was
+        broken.
+        """
+        upsert_resp = httpx.post(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors/upsert",
+            json={"document": "refunds within 30 days", "namespace": "faq", "metadata": {}},
+            timeout=90,
+        )
+        assert upsert_resp.status_code == 200, upsert_resp.text
+        vector_id = upsert_resp.json()["id"]
+
+        # Sanity: explicitly filtering by the real namespace finds it.
+        filtered = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors",
+            params={"namespace": "faq"},
+            timeout=10,
+        )
+        assert filtered.status_code == 200
+        assert any(v["id"] == vector_id for v in filtered.json())
+
+        # The actual bug: omitting namespace entirely (the dashboard's "All
+        # namespaces" state) must also find it, not silently filter to
+        # "default" and hide every other namespace's vectors.
+        unfiltered = httpx.get(
+            f"{lite_server}/v1/projects/{project_id}/database/vectors",
+            timeout=10,
+        )
+        assert unfiltered.status_code == 200
+        assert any(v["id"] == vector_id for v in unfiltered.json()), (
+            "GET /vectors with no namespace param must return vectors from "
+            "every namespace, not silently default to namespace='default'"
+        )
+
+
+class TestVectorDataDirIsolation:
+    """
+    Refs #88: `api/services/qdrant_service.py`'s module-level `qdrant_service`
+    singleton calls `FAISSService()` with no arguments in lite mode, which
+    defaults to `~/.zerodb/data` (`lite/services/faiss_service.py`'s
+    `__init__`). It never reads `lite.config.DATA_DIR` -- the same
+    ZERODB_DATA_DIR-derived constant `DatabaseServiceLite` (SQLite) and
+    everything else in the app correctly uses. So two independent
+    `zerodb serve --data-dir <X>` processes, each meant to be fully
+    isolated per the "local-first, this project's own data" design, instead
+    silently share ONE global FAISS vector store at `~/.zerodb/data`,
+    regardless of what `--data-dir` either was started with -- confirmed
+    live: a vector upserted against one `--data-dir` never produces a
+    `vectors.faiss`/`vectors_meta.json` file in that directory at all.
+
+    This test starts two real, separate lite-mode server subprocesses with
+    two distinct, disposable data directories (not the shared module-scoped
+    `lite_server` fixture, which only runs one server) and confirms a vector
+    upserted against server A is only ever searchable from server A, never
+    from server B.
+    """
+
+    @staticmethod
+    def _start_server(data_dir: str, port: int):
+        api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
+        env = dict(os.environ)
+        env["ZERODB_BACKEND"] = "lite"
+        env["TESTING"] = "true"
+        env["ZERODB_DATA_DIR"] = data_dir
+        env.pop("DATABASE_URL", None)
+
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "uvicorn", "main:app",
+                "--host", "127.0.0.1", "--port", str(port),
+                "--log-level", "error",
+            ],
+            cwd=os.path.abspath(api_dir),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        for _ in range(50):
+            if proc.poll() is not None:
+                pytest.fail(f"Lite server subprocess exited early with code {proc.returncode}")
+            try:
+                if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
+                    return proc, base_url
+            except httpx.ConnectError:
+                time.sleep(0.2)
+        pytest.fail("Lite server did not start in time")
+
+    def test_vector_data_isolated_between_two_data_dirs(self, tmp_path_factory):
+        data_dir_a = str(tmp_path_factory.mktemp("zerodb_isolation_a"))
+        data_dir_b = str(tmp_path_factory.mktemp("zerodb_isolation_b"))
+
+        proc_a, url_a = self._start_server(data_dir_a, 18744)
+        try:
+            proc_b, url_b = self._start_server(data_dir_b, 18745)
+            try:
+                project_a = httpx.post(
+                    f"{url_a}/v1/projects",
+                    json={"name": "isolation-test-a", "description": ""},
+                    timeout=10,
+                ).json()["id"]
+                project_b = httpx.post(
+                    f"{url_b}/v1/projects",
+                    json={"name": "isolation-test-b", "description": ""},
+                    timeout=10,
+                ).json()["id"]
+
+                upsert_resp = httpx.post(
+                    f"{url_a}/v1/projects/{project_a}/database/vectors/upsert",
+                    json={"document": "isolation marker unique phrase xyzzy", "namespace": "default", "metadata": {}},
+                    timeout=90,
+                )
+                assert upsert_resp.status_code == 200, upsert_resp.text
+
+                # The FAISS index/metadata files must land under THIS
+                # server's own --data-dir, not the global ~/.zerodb/data
+                # default.
+                assert os.path.exists(os.path.join(data_dir_a, "vectors.faiss")), (
+                    "Server A's FAISS index was not written to its own --data-dir -- "
+                    "the shared qdrant_service singleton is still using the hardcoded "
+                    "~/.zerodb/data default instead of this server's configured data dir."
+                )
+
+                # Server B (different --data-dir, different process) must
+                # NOT see server A's vector via search.
+                search_b = httpx.post(
+                    f"{url_b}/v1/projects/{project_b}/database/vectors/search",
+                    json={"query": "isolation marker unique phrase xyzzy", "limit": 10, "threshold": 0.0},
+                    timeout=30,
+                )
+                assert search_b.status_code == 200, search_b.text
+                assert search_b.json() == [], (
+                    "Server B found a vector that was only ever upserted against "
+                    "server A's --data-dir -- the two servers are sharing one global "
+                    "FAISS index instead of being isolated per --data-dir."
+                )
+            finally:
+                proc_b.terminate()
+                try:
+                    proc_b.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc_b.kill()
+                    proc_b.wait(timeout=5)
+        finally:
+            proc_a.terminate()
+            try:
+                proc_a.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc_a.kill()
+                proc_a.wait(timeout=5)
+
 
 class TestEventsCRUD:
     """Refs #47: events_service hardcoded CAST(... AS jsonb) and crashed on
