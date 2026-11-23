@@ -24,7 +24,22 @@ console = Console()
 # Default paths
 DEFAULT_DATA_DIR = Path.home() / ".zerodb" / "data"
 DEFAULT_PORT = 8000
-DEFAULT_HOST = "0.0.0.0"
+# Only this machine by default: local mode has no sign-in, so listening on
+# all interfaces would expose every project to the whole network. Opt in
+# with --host 0.0.0.0 (and set ZERODB_LOCAL_API_KEY when you do).
+DEFAULT_HOST = "127.0.0.1"
+
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def exposure_warning(host: str, key_set: bool) -> Optional[str]:
+    """Warning text when the server is reachable from other machines with no key."""
+    if host in _LOOPBACK or key_set:
+        return None
+    return (
+        f"Listening on {host}: anyone who can reach this port can read and change "
+        "your data. Set ZERODB_LOCAL_API_KEY to require a key, or use --host 127.0.0.1."
+    )
 EMBEDDING_MODEL_MARKER = ".embedding_model_ready"
 
 
@@ -159,6 +174,9 @@ def serve(
 
     # Print startup banner
     print_startup_banner(host, port, data_dir)
+    warning = exposure_warning(host, key_set=bool(os.getenv("ZERODB_LOCAL_API_KEY", "").strip()))
+    if warning:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
 
     # Start the server
     uvicorn.run(

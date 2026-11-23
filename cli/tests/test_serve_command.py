@@ -89,11 +89,15 @@ class TestServeDefaults:
 
         assert DEFAULT_PORT == 8000
 
-    def test_default_host_is_all_interfaces(self):
-        """Given no --host flag, the default host should bind to all interfaces"""
+    def test_default_host_is_this_machine_only(self):
+        """Given no --host flag, the server is only reachable from this machine.
+
+        Local mode has no sign-in, so listening on all interfaces by default
+        would expose every project to anyone on the same network.
+        """
         from commands.serve import DEFAULT_HOST
 
-        assert DEFAULT_HOST == "0.0.0.0"
+        assert DEFAULT_HOST == "127.0.0.1"
 
     def test_default_data_dir_is_home_zerodb(self):
         """Given no --data-dir flag, the default should be ~/.zerodb/data/"""
@@ -109,7 +113,7 @@ class TestServeDefaults:
 
         mock_uvicorn.run.assert_called_once_with(
             "app.main:app",
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=8000,
             reload=False,
             log_level="info",
@@ -436,3 +440,28 @@ class TestServeFunctions:
         download_embedding_model(data_dir)
 
         assert marker.exists()
+
+
+# ===== Network exposure warning =====
+
+class TestExposureWarning:
+    """Scenario: User opts into listening on the network"""
+
+    def test_no_warning_on_loopback(self):
+        from commands.serve import exposure_warning
+
+        assert exposure_warning("127.0.0.1", key_set=False) is None
+        assert exposure_warning("localhost", key_set=False) is None
+        assert exposure_warning("::1", key_set=False) is None
+
+    def test_warns_when_exposed_without_a_key(self):
+        from commands.serve import exposure_warning
+
+        msg = exposure_warning("0.0.0.0", key_set=False)
+        assert msg is not None
+        assert "ZERODB_LOCAL_API_KEY" in msg
+
+    def test_quiet_when_exposed_with_a_key(self):
+        from commands.serve import exposure_warning
+
+        assert exposure_warning("0.0.0.0", key_set=True) is None
