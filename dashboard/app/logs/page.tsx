@@ -1,443 +1,201 @@
 'use client'
 
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Activity, Download, RefreshCw, Search } from 'lucide-react'
 import { apiClient } from '@/services/api-client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader, PageShell } from '@/components/layout/page-header'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
-import {
-  Activity,
-  Search,
-  Filter,
-  Download,
-  RefreshCw,
-  AlertCircle,
-  Info,
-  AlertTriangle,
-  XCircle,
-  Bug,
-  Database,
-  Server,
-  HardDrive,
-  Cpu,
-  Code,
-  Layout,
-} from 'lucide-react'
-import { useState, useEffect, useRef } from 'react'
-import { formatRelativeTime } from '@/lib/utils'
+import { Select } from '@/components/ui/form-controls'
+import { cn } from '@/lib/utils'
 import type { LogEntry } from '@/types'
 
-// Service icons mapping
-const SERVICE_ICONS = {
-  postgres: Database,
-  qdrant: Server,
-  minio: HardDrive,
-  redpanda: Cpu,
-  embeddings: Code,
-  api: Server,
-  dashboard: Layout,
-}
+const LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const
 
-// Log level colors
-const LOG_LEVEL_COLORS = {
-  DEBUG: 'bg-gray-100 text-gray-700 border-gray-300',
-  INFO: 'bg-blue-100 text-blue-700 border-blue-300',
-  WARNING: 'bg-yellow-100 text-yellow-700 border-yellow-300',
-  ERROR: 'bg-red-100 text-red-700 border-red-300',
-  CRITICAL: 'bg-red-200 text-red-900 border-red-400 font-bold',
+// Colours are for the always-dark terminal surface, so they're fixed hues
+// rather than theme tokens. Each passes AA on --terminal.
+const LEVEL_TEXT: Record<string, string> = {
+  DEBUG: 'text-slate-400',
+  INFO: 'text-cyan-400',
+  WARNING: 'text-amber-400',
+  ERROR: 'text-red-400',
+  CRITICAL: 'text-red-300 font-semibold',
 }
-
-// Log level icons
-const LOG_LEVEL_ICONS = {
-  DEBUG: Bug,
-  INFO: Info,
-  WARNING: AlertTriangle,
-  ERROR: XCircle,
-  CRITICAL: AlertCircle,
+const LEVEL_DOT: Record<string, string> = {
+  DEBUG: 'bg-slate-400',
+  INFO: 'bg-cyan-400',
+  WARNING: 'bg-amber-400',
+  ERROR: 'bg-red-400',
+  CRITICAL: 'bg-red-500',
+}
+const ROW_TINT: Record<string, string> = {
+  WARNING: 'bg-amber-400/[0.07]',
+  ERROR: 'bg-red-400/10',
+  CRITICAL: 'bg-red-400/15',
 }
 
 export default function LogsPage(): JSX.Element {
-  // State
-  const [selectedService, setSelectedService] = useState<string>('')
-  const [selectedLevel, setSelectedLevel] = useState<string>('')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [autoScroll, setAutoScroll] = useState(true)
+  const [service, setService] = useState('')
+  const [hidden, setHidden] = useState<Record<string, boolean>>({})
+  const [search, setSearch] = useState('')
+  const [live, setLive] = useState(true)
   const [sinceMinutes, setSinceMinutes] = useState(60)
-  const [limit, setLimit] = useState(100)
-  const logsEndRef = useRef<HTMLDivElement>(null)
+  const [limit, setLimit] = useState(500)
+  const endRef = useRef<HTMLDivElement>(null)
 
-  // Fetch available services
   const { data: services } = useQuery({
     queryKey: ['log-services'],
     queryFn: () => apiClient.getAvailableServices(),
   })
 
-  // Fetch available log levels
-  const { data: levels } = useQuery({
-    queryKey: ['log-levels'],
-    queryFn: () => apiClient.getLogLevels(),
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ['logs', service, limit, sinceMinutes],
+    queryFn: () => apiClient.getLogs(service || undefined, undefined, limit, sinceMinutes),
+    refetchInterval: live ? 5000 : false,
   })
 
-  // Fetch logs with auto-refresh
-  const {
-    data: logsData,
-    isLoading,
-    refetch,
-    isFetching,
-  } = useQuery({
-    queryKey: ['logs', selectedService, selectedLevel, limit, sinceMinutes],
-    queryFn: () =>
-      apiClient.getLogs(
-        selectedService || undefined,
-        selectedLevel || undefined,
-        limit,
-        sinceMinutes
-      ),
-    refetchInterval: autoScroll ? 5000 : false, // Auto-refresh every 5 seconds if enabled
-  })
-
-  // Filter logs by search query
-  const filteredLogs = logsData?.logs.filter((log) =>
-    log.message.toLowerCase().includes(searchQuery.toLowerCase())
+  const logs = data?.logs ?? []
+  const counts = logs.reduce<Record<string, number>>((acc, l) => {
+    acc[l.level] = (acc[l.level] ?? 0) + 1
+    return acc
+  }, {})
+  const q = search.trim().toLowerCase()
+  const shown = logs.filter(
+    (l) => !hidden[l.level] && (!q || `${l.message} ${l.service} ${l.source ?? ''}`.toLowerCase().includes(q))
   )
 
-  // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
-    if (autoScroll && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [filteredLogs, autoScroll])
+    if (live) endRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [shown.length, live])
 
-  // Calculate log level counts
-  const logLevelCounts = logsData?.logs.reduce(
-    (acc, log) => {
-      acc[log.level] = (acc[log.level] || 0) + 1
-      return acc
-    },
-    {} as Record<string, number>
-  )
-
-  // Calculate service counts
-  const serviceCounts = logsData?.logs.reduce(
-    (acc, log) => {
-      acc[log.service] = (acc[log.service] || 0) + 1
-      return acc
-    },
-    {} as Record<string, number>
-  )
-
-  // Export logs as JSON
-  const handleExportLogs = () => {
-    if (!logsData) return
-
-    const dataStr = JSON.stringify(logsData.logs, null, 2)
-    const dataBlob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(dataBlob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `zerodb-logs-${new Date().toISOString()}.json`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+  const exportLogs = () => {
+    const blob = new Blob([JSON.stringify(logs, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `zerodb-logs-${new Date().toISOString()}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
     URL.revokeObjectURL(url)
   }
 
-  // Format log entry for display
-  const formatLogEntry = (log: LogEntry) => {
-    const ServiceIcon = SERVICE_ICONS[log.service] || Server
-    const LevelIcon = LOG_LEVEL_ICONS[log.level] || Info
-    const levelColor = LOG_LEVEL_COLORS[log.level] || LOG_LEVEL_COLORS.INFO
-
-    return (
-      <div
-        key={`${log.timestamp}-${log.service}-${log.message.substring(0, 20)}`}
-        className="border-b border-gray-200 py-3 px-4 hover:bg-gray-50 transition-colors font-mono text-sm"
-      >
-        <div className="flex items-start gap-3">
-          {/* Timestamp */}
-          <div className="text-gray-500 text-xs whitespace-nowrap min-w-[140px] mt-0.5">
-            {new Date(log.timestamp).toLocaleTimeString('en-US', {
-              hour12: false,
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            })}
-          </div>
-
-          {/* Service Badge */}
-          <div className="flex items-center gap-1 min-w-[100px]">
-            <ServiceIcon className="h-3 w-3 text-gray-600" />
-            <Badge variant="outline" className="text-xs">
-              {log.service}
-            </Badge>
-          </div>
-
-          {/* Level Badge */}
-          <div className="flex items-center gap-1 min-w-[90px]">
-            <LevelIcon className="h-3 w-3" />
-            <Badge className={`text-xs ${levelColor}`}>{log.level}</Badge>
-          </div>
-
-          {/* Message */}
-          <div className="flex-1 text-gray-800 break-words">{log.message}</div>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="p-8">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
-          <Activity className="h-8 w-8" />
-          System Logs
-        </h1>
-        <p className="text-gray-600">
-          Real-time log streaming from all ZeroDB services
+    <PageShell>
+      <PageHeader
+        title="Logs"
+        description="Server output from the API, for debugging."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setLive((l) => !l)} aria-pressed={live}>
+              <span aria-hidden="true" className={cn('h-2 w-2 rounded-full', live ? 'bg-emerald-500' : 'bg-muted-foreground')} />
+              {live ? 'Live' : 'Paused'}
+            </Button>
+            <Button variant="outline" size="icon" onClick={() => refetch()} disabled={isFetching} aria-label="Refresh logs">
+              <RefreshCw aria-hidden="true" className={cn('h-4 w-4', isFetching && 'animate-spin')} />
+            </Button>
+            <Button variant="outline" onClick={exportLogs} disabled={!logs.length}>
+              <Download aria-hidden="true" className="h-4 w-4" /> Export
+            </Button>
+          </>
+        }
+      />
+
+      <section aria-label="Filters" className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative min-w-[240px] flex-[1_1_300px] max-w-[460px]">
+            <label htmlFor="log-search" className="sr-only">Search logs</label>
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input id="log-search" placeholder="Search message, service or source" value={search} onChange={(e) => setSearch(e.target.value)} className="h-10 pl-9" />
+          </div>
+          <label htmlFor="log-service" className="sr-only">Service</label>
+          <Select id="log-service" value={service} onChange={(e) => setService(e.target.value)} className="h-10 w-auto">
+            <option value="">All services</option>
+            {services?.map((s) => <option key={s} value={s}>{s}</option>)}
+          </Select>
+          <label htmlFor="log-range" className="sr-only">Time range</label>
+          <Select id="log-range" value={sinceMinutes} onChange={(e) => setSinceMinutes(Number(e.target.value))} className="h-10 w-auto">
+            <option value={5}>Last 5 minutes</option>
+            <option value={15}>Last 15 minutes</option>
+            <option value={60}>Last hour</option>
+            <option value={360}>Last 6 hours</option>
+            <option value={1440}>Last 24 hours</option>
+          </Select>
+          <label htmlFor="log-limit" className="sr-only">Max entries</label>
+          <Select id="log-limit" value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="h-10 w-auto">
+            {[100, 250, 500, 1000].map((n) => <option key={n} value={n}>{n} lines</option>)}
+          </Select>
+        </div>
+
+        {/* Replaces the six stat cards: one row of level toggles. Empty
+            levels stay quiet instead of shouting a row of zeros. */}
+        <div role="group" aria-label="Levels" className="flex flex-wrap gap-1.5">
+          {LEVELS.map((lvl) => {
+            const n = counts[lvl] ?? 0
+            const on = !hidden[lvl]
+            return (
+              <button
+                key={lvl}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setHidden((h) => ({ ...h, [lvl]: on }))}
+                className={cn(
+                  'inline-flex h-9 items-center gap-1.5 rounded-lg border px-2.5 font-mono text-xs font-medium transition-colors',
+                  on && n > 0 ? 'border-border bg-card text-foreground' : 'border-transparent text-muted-foreground',
+                  !on && 'line-through'
+                )}
+              >
+                <span aria-hidden="true" className={cn('h-[7px] w-[7px] rounded-full', LEVEL_DOT[lvl])} />
+                {lvl} <span className="opacity-75">{n}</span>
+              </button>
+            )
+          })}
+        </div>
+      </section>
+
+      <section aria-label="Log stream" className="overflow-hidden rounded-xl border bg-terminal">
+        <div className="max-h-[640px] overflow-auto">
+          {isLoading ? (
+            <p className="px-4 py-10 text-center text-sm text-terminal-foreground">Loading logs…</p>
+          ) : error ? (
+            <p role="alert" className="px-4 py-10 text-center text-sm text-red-300">{(error as Error).message}</p>
+          ) : shown.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 px-4 py-12 text-terminal-foreground">
+              <Activity aria-hidden="true" className="h-10 w-10 opacity-50" />
+              <p className="text-sm">{q || Object.values(hidden).some(Boolean) ? 'No lines match these filters.' : 'No log lines in this time range.'}</p>
+            </div>
+          ) : (
+            <div className="min-w-[760px] py-1.5 font-mono text-[12.5px] leading-normal">
+              {shown.map((l, i) => (
+                <LogLine key={`${l.timestamp}-${i}`} log={l} />
+              ))}
+              <div ref={endRef} />
+            </div>
+          )}
+        </div>
+      </section>
+
+      {data && (
+        <p className="text-[13px] text-muted-foreground">
+          {shown.length} of {data.total_count ?? logs.length} lines · {new Date(data.time_range_start).toLocaleTimeString()}–
+          {new Date(data.time_range_end).toLocaleTimeString()}
+          {live && ' · refreshing every 5 seconds'}
         </p>
-      </div>
+      )}
+    </PageShell>
+  )
+}
 
-      {/* Metrics Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
-        {/* Total Logs */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription className="flex items-center gap-1">
-              <Activity className="h-3 w-3" />
-              Total
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{logsData?.total_count || 0}</div>
-            <p className="text-xs text-gray-500 mt-1">Log entries</p>
-          </CardContent>
-        </Card>
-
-        {/* Log Level Counts */}
-        {levels?.map((level) => {
-          const LevelIcon = LOG_LEVEL_ICONS[level as keyof typeof LOG_LEVEL_ICONS] || Info
-          const count = logLevelCounts?.[level] || 0
-          const colorClass = LOG_LEVEL_COLORS[level as keyof typeof LOG_LEVEL_COLORS]
-
-          return (
-            <Card key={level} className={count > 0 ? 'border-2' : ''}>
-              <CardHeader className="pb-3">
-                <CardDescription className="flex items-center gap-1">
-                  <LevelIcon className="h-3 w-3" />
-                  {level}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className={`text-2xl font-bold ${count > 0 ? 'text-gray-900' : 'text-gray-400'}`}>
-                  {count}
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  {count === 0 ? 'None' : 'entries'}
-                </p>
-              </CardContent>
-            </Card>
-          )
-        })}
-      </div>
-
-      {/* Filters */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Filter className="h-4 w-4" />
-            Filters & Controls
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Service Filter */}
-            <div>
-              <Label htmlFor="service-filter" className="text-sm font-medium mb-2 block">
-                Service
-              </Label>
-              <select
-                id="service-filter"
-                className="w-full px-3 py-2 border rounded-md text-sm"
-                value={selectedService}
-                onChange={(e) => setSelectedService(e.target.value)}
-              >
-                <option value="">All Services</option>
-                {services?.map((service) => {
-                  const count = serviceCounts?.[service] || 0
-                  return (
-                    <option key={service} value={service}>
-                      {service} ({count})
-                    </option>
-                  )
-                })}
-              </select>
-            </div>
-
-            {/* Level Filter */}
-            <div>
-              <Label htmlFor="level-filter" className="text-sm font-medium mb-2 block">
-                Log Level
-              </Label>
-              <select
-                id="level-filter"
-                className="w-full px-3 py-2 border rounded-md text-sm"
-                value={selectedLevel}
-                onChange={(e) => setSelectedLevel(e.target.value)}
-              >
-                <option value="">All Levels</option>
-                {levels?.map((level) => {
-                  const count = logLevelCounts?.[level] || 0
-                  return (
-                    <option key={level} value={level}>
-                      {level} ({count})
-                    </option>
-                  )
-                })}
-              </select>
-            </div>
-
-            {/* Time Range */}
-            <div>
-              <Label htmlFor="time-range" className="text-sm font-medium mb-2 block">
-                Time Range
-              </Label>
-              <select
-                id="time-range"
-                className="w-full px-3 py-2 border rounded-md text-sm"
-                value={sinceMinutes}
-                onChange={(e) => setSinceMinutes(Number(e.target.value))}
-              >
-                <option value={5}>Last 5 minutes</option>
-                <option value={15}>Last 15 minutes</option>
-                <option value={30}>Last 30 minutes</option>
-                <option value={60}>Last hour</option>
-                <option value={360}>Last 6 hours</option>
-                <option value={1440}>Last 24 hours</option>
-              </select>
-            </div>
-
-            {/* Limit */}
-            <div>
-              <Label htmlFor="limit" className="text-sm font-medium mb-2 block">
-                Max Entries
-              </Label>
-              <select
-                id="limit"
-                className="w-full px-3 py-2 border rounded-md text-sm"
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value))}
-              >
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={250}>250</option>
-                <option value={500}>500</option>
-                <option value={1000}>1000</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Search and Actions Row */}
-          <div className="mt-4 flex flex-col md:flex-row gap-4">
-            {/* Search */}
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                placeholder="Search log messages..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
-            </div>
-
-            {/* Auto-scroll Toggle */}
-            <div className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-gray-50">
-              <Switch
-                id="auto-scroll"
-                checked={autoScroll}
-                onCheckedChange={setAutoScroll}
-              />
-              <Label htmlFor="auto-scroll" className="cursor-pointer text-sm">
-                Auto-scroll
-              </Label>
-            </div>
-
-            {/* Refresh Button */}
-            <Button
-              variant="outline"
-              onClick={() => refetch()}
-              disabled={isFetching}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-
-            {/* Export Button */}
-            <Button variant="outline" onClick={handleExportLogs}>
-              <Download className="h-4 w-4 mr-2" />
-              Export
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Logs Display */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-lg">
-              Log Stream
-              {searchQuery && (
-                <span className="text-sm text-gray-500 ml-2">
-                  ({filteredLogs?.length || 0} of {logsData?.logs.length || 0} shown)
-                </span>
-              )}
-            </CardTitle>
-            {autoScroll && (
-              <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                <Activity className="h-3 w-3 mr-1 animate-pulse" />
-                Live
-              </Badge>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="max-h-[600px] overflow-y-auto bg-gray-50">
-            {isLoading ? (
-              <div className="flex justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-              </div>
-            ) : filteredLogs && filteredLogs.length > 0 ? (
-              <div>
-                {filteredLogs.map((log) => formatLogEntry(log))}
-                <div ref={logsEndRef} />
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-                <Activity className="h-12 w-12 mb-4 opacity-50" />
-                <p className="text-sm">
-                  {searchQuery
-                    ? 'No logs match your search criteria'
-                    : 'No logs available for the selected filters'}
-                </p>
-                <p className="text-xs mt-2">
-                  Try adjusting your filters or time range
-                </p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Footer Info */}
-      <div className="mt-4 text-xs text-gray-500 text-center">
-        Showing logs from {new Date(logsData?.time_range_start || '').toLocaleString()} to{' '}
-        {new Date(logsData?.time_range_end || '').toLocaleString()}
-        {autoScroll && ' • Auto-refreshing every 5 seconds'}
-      </div>
+function LogLine({ log }: { log: LogEntry }) {
+  return (
+    <div className={cn('grid grid-cols-[96px_76px_120px_minmax(0,1fr)] gap-3.5 px-4 py-[5px]', ROW_TINT[log.level])}>
+      <span className="text-slate-400">
+        {new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+      </span>
+      <span className={LEVEL_TEXT[log.level] ?? 'text-slate-300'}>{log.level}</span>
+      <span className="truncate text-cyan-300">{log.service}</span>
+      <span className="whitespace-pre-wrap break-words text-slate-300">{log.message}</span>
     </div>
   )
 }

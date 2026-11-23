@@ -1,119 +1,195 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import * as React from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, Table2, Trash2 } from 'lucide-react'
 import { apiClient } from '@/services/api-client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader, PageShell } from '@/components/layout/page-header'
+import { EmptyState, ErrorState, LoadingState, RequireProject } from '@/components/layout/states'
+import { CreateTableDialog } from '@/components/tables/create-table-dialog'
+import { AddRowDialog } from '@/components/tables/add-row-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Button } from '@/components/ui/button'
-import { Table as TableIcon, Database, FileJson } from 'lucide-react'
-import { useState } from 'react'
-import { formatRelativeTime, formatNumber } from '@/lib/utils'
+import { useProject } from '@/components/providers/project-provider'
+import { schemaToColumns } from '@/lib/schema-builder'
+import { cn } from '@/lib/utils'
+import { useNewParam } from '@/lib/use-new-param'
+import type { Table } from '@/types'
 
 export default function TablesPage() {
-  const [selectedProject, setSelectedProject] = useState<string>()
+  const { project } = useProject()
+  const [open, setOpen] = useNewParam()
+  const [selected, setSelected] = React.useState<string | null>(null)
 
-  const { data: projects } = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => apiClient.listProjects(),
+  return (
+    <PageShell>
+      <PageHeader
+        scoped
+        title="Tables"
+        actions={
+          project && (
+            <Button onClick={() => setOpen(true)}>
+              <Plus aria-hidden="true" className="h-4 w-4" strokeWidth={2.5} /> Create table
+            </Button>
+          )
+        }
+      />
+      <RequireProject>
+        {(projectId) => (
+          <>
+            <TableBrowser projectId={projectId} selected={selected} onSelect={setSelected} onCreate={() => setOpen(true)} />
+            <CreateTableDialog projectId={projectId} open={open} onOpenChange={setOpen} onCreated={setSelected} />
+          </>
+        )}
+      </RequireProject>
+    </PageShell>
+  )
+}
+
+function TableBrowser({
+  projectId,
+  selected,
+  onSelect,
+  onCreate,
+}: {
+  projectId: string
+  selected: string | null
+  onSelect: (n: string | null) => void
+  onCreate: () => void
+}) {
+  const tables = useQuery({
+    queryKey: ['tables', projectId],
+    queryFn: () => apiClient.listTables(projectId),
   })
 
-  const { data: tables, isLoading } = useQuery({
-    queryKey: ['tables', selectedProject],
-    queryFn: () => selectedProject ? apiClient.listTables(selectedProject) : Promise.resolve([]),
-    enabled: !!selectedProject,
+  if (tables.isLoading) return <LoadingState label="Loading tables" />
+  if (tables.error) return <ErrorState error={tables.error} what="tables" />
+  const list = tables.data ?? []
+  if (list.length === 0) {
+    return (
+      <EmptyState icon={Table2} title="No tables yet" action={<Button onClick={onCreate}><Plus aria-hidden="true" className="h-4 w-4" /> Create your first table</Button>}>
+        Describe your columns in plain words, or paste a JSON schema.
+      </EmptyState>
+    )
+  }
+
+  const current = list.find((t) => t.name === selected) ?? list[0]
+
+  return (
+    <div className="flex flex-wrap items-start gap-4">
+      <nav aria-label="Tables in this project" className="flex w-full flex-col gap-1.5 sm:w-64">
+        {list.map((t) => {
+          const on = t.name === current.name
+          const count = Object.keys((t.schema?.fields ?? t.schema) || {}).length
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => onSelect(t.name)}
+              aria-current={on ? 'true' : undefined}
+              className={cn(
+                'flex flex-col gap-0.5 rounded-[10px] border px-3.5 py-3 text-left transition-colors',
+                on ? 'border-primary bg-accent' : 'bg-card hover:bg-muted'
+              )}
+            >
+              <span className="font-mono font-medium">{t.name}</span>
+              <span className="text-xs text-muted-foreground">{count} {count === 1 ? 'column' : 'columns'}</span>
+            </button>
+          )
+        })}
+      </nav>
+      <RowViewer projectId={projectId} table={current} onDeleted={() => onSelect(null)} />
+    </div>
+  )
+}
+
+function RowViewer({ projectId, table, onDeleted }: { projectId: string; table: Table; onDeleted: () => void }) {
+  const qc = useQueryClient()
+  const [adding, setAdding] = React.useState(false)
+  const [confirm, setConfirm] = React.useState(false)
+  const columns = schemaToColumns(table.schema ?? {})
+
+  const rows = useQuery({
+    queryKey: ['rows', projectId, table.name],
+    queryFn: () => apiClient.queryTable(projectId, table.name, { limit: 100 }),
+  })
+
+  const drop = useMutation({
+    mutationFn: () => apiClient.deleteTable(projectId, table.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tables', projectId] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      setConfirm(false)
+      onDeleted()
+    },
   })
 
   return (
-    <div className="p-8">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">NoSQL Tables</h1>
-        <p className="text-gray-600">
-          Browse and manage your document-based data collections
-        </p>
+    <section aria-label={`${table.name} rows`} className="flex min-w-0 flex-[999_1_480px] flex-col rounded-xl border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-2.5 border-b px-4 py-3.5">
+        <div className="flex min-w-0 flex-col">
+          <h2 className="font-mono text-[15px] font-medium">{table.name}</h2>
+          {table.description && <p className="text-xs text-muted-foreground">{table.description}</p>}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+            <Plus aria-hidden="true" className="h-[15px] w-[15px]" strokeWidth={2.5} /> Add row
+          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label={`Delete table ${table.name}`} onClick={() => setConfirm(true)}>
+            <Trash2 aria-hidden="true" className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
-      {/* Project Selector */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-lg">Select Project</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            {projects && projects.length > 0 ? (
-              projects.map((project) => (
-                <Button
-                  key={project.id}
-                  variant={selectedProject === project.id ? 'default' : 'outline'}
-                  onClick={() => setSelectedProject(project.id)}
-                >
-                  {project.name}
-                </Button>
-              ))
-            ) : (
-              <p className="text-gray-500">No projects available</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Tables List */}
-      {selectedProject && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {isLoading ? (
-            <Card>
-              <CardContent className="flex justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-              </CardContent>
-            </Card>
-          ) : tables && tables.length > 0 ? (
-            tables.map((table) => (
-              <Card key={table.id} className="hover:shadow-lg transition-shadow">
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-xl mb-1">{table.name}</CardTitle>
-                      <CardDescription>NoSQL collection</CardDescription>
-                    </div>
-                    <TableIcon className="h-5 w-5 text-gray-400" />
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2 mb-4">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Rows</span>
-                      <span className="font-medium">{formatNumber(table.row_count)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Created</span>
-                      <span className="font-medium">{formatRelativeTime(table.created_at)}</span>
-                    </div>
-                  </div>
-                  <Button variant="outline" className="w-full" size="sm">
-                    <FileJson className="h-3 w-3 mr-2" />
-                    View Data
-                  </Button>
-                </CardContent>
-              </Card>
-            ))
-          ) : (
-            <Card className="col-span-full">
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <TableIcon className="h-12 w-12 text-gray-400 mb-4" />
-                <p className="text-gray-500">No tables in this project</p>
-              </CardContent>
-            </Card>
-          )}
+      {rows.isLoading && <LoadingState label="Loading rows" />}
+      {rows.error && <div className="p-4"><ErrorState error={rows.error} what="rows" /></div>}
+      {rows.data && rows.data.length === 0 && (
+        <p className="px-4 py-10 text-center text-muted-foreground">No rows yet. Add one to see it here.</p>
+      )}
+      {rows.data && rows.data.length > 0 && (
+        <div className="relative overflow-x-auto">
+          <table className="w-full min-w-[620px] border-collapse text-left">
+            <thead>
+              <tr className="bg-muted text-xs text-muted-foreground">
+                <th scope="col" className="px-4 py-2.5 font-semibold">id</th>
+                {columns.map((c) => (
+                  <th key={c.name} scope="col" className="px-4 py-2.5 font-semibold">
+                    {c.name} <span className="font-mono font-normal">{c.type}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.data.map((r) => (
+                <tr key={r.id} className="border-t">
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-[13px] text-muted-foreground">{r.id.slice(0, 8)}</td>
+                  {columns.map((c) => {
+                    const v = r.data?.[c.name]
+                    return (
+                      <td key={c.name} className="px-4 py-3 text-sm">
+                        {v === undefined || v === null ? <span className="text-muted-foreground">–</span> : typeof v === 'object' ? <code className="font-mono text-xs">{JSON.stringify(v)}</code> : String(v)}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {!selectedProject && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Database className="h-12 w-12 text-gray-400 mb-4" />
-            <p className="text-gray-500">Select a project to view tables</p>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+      <AddRowDialog projectId={projectId} table={table.name} columns={columns} open={adding} onOpenChange={setAdding} />
+      <ConfirmDialog
+        open={confirm}
+        onOpenChange={setConfirm}
+        title={`Delete ${table.name}?`}
+        confirmLabel="Delete table"
+        onConfirm={() => drop.mutate()}
+        pending={drop.isPending}
+        error={drop.error}
+      >
+        The table and all its rows are removed. This can’t be undone.
+      </ConfirmDialog>
+    </section>
   )
 }

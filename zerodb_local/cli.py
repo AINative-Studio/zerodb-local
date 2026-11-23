@@ -51,7 +51,11 @@ if not _full_app_loaded:
 
     @app.command()
     def serve(
-        host: str = typer.Option("0.0.0.0", help="Bind address"),
+        host: str = typer.Option(
+            "127.0.0.1",
+            help="Bind address. 127.0.0.1 = this machine only; 0.0.0.0 = whole network "
+            "(set ZERODB_LOCAL_API_KEY when you do)",
+        ),
         port: int = typer.Option(8000, help="Port number"),
         reload: bool = typer.Option(False, help="Enable auto-reload"),
     ):
@@ -59,6 +63,14 @@ if not _full_app_loaded:
         import uvicorn
 
         typer.echo(f"Starting ZeroDB Local on {host}:{port}")
+        import os
+
+        if host not in ("127.0.0.1", "localhost", "::1") and not os.getenv("ZERODB_LOCAL_API_KEY", "").strip():
+            typer.echo(
+                f"Warning: listening on {host}: anyone who can reach this port can read and change "
+                "your data. Set ZERODB_LOCAL_API_KEY to require a key, or use --host 127.0.0.1.",
+                err=True,
+            )
         uvicorn.run(
             "zerodb_local.server:create_app",
             factory=True,
