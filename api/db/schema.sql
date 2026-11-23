@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS projects (
     CONSTRAINT projects_name_check CHECK (char_length(name) > 0)
 );
 
-CREATE INDEX idx_projects_user_id ON projects(user_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_projects_org_id ON projects(organization_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_projects_created_at ON projects(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_projects_org_id ON projects(organization_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_projects_created_at ON projects(created_at DESC);
 
 -- ==========================================
 -- VECTORS TABLE
@@ -51,11 +51,11 @@ CREATE TABLE IF NOT EXISTS vectors (
     CONSTRAINT vectors_project_namespace_vector_id_unique UNIQUE (project_id, namespace, vector_id)
 );
 
-CREATE INDEX idx_vectors_project_id ON vectors(project_id);
-CREATE INDEX idx_vectors_project_namespace ON vectors(project_id, namespace);
-CREATE INDEX idx_vectors_embedding ON vectors USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-CREATE INDEX idx_vectors_metadata ON vectors USING gin(metadata);
-CREATE INDEX idx_vectors_created_at ON vectors(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vectors_project_id ON vectors(project_id);
+CREATE INDEX IF NOT EXISTS idx_vectors_project_namespace ON vectors(project_id, namespace);
+CREATE INDEX IF NOT EXISTS idx_vectors_embedding ON vectors USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_vectors_metadata ON vectors USING gin(metadata);
+CREATE INDEX IF NOT EXISTS idx_vectors_created_at ON vectors(project_id, created_at DESC);
 
 -- ==========================================
 -- MEMORY TABLE
@@ -74,11 +74,11 @@ CREATE TABLE IF NOT EXISTS memory (
     CONSTRAINT memory_role_check CHECK (role IN ('user', 'assistant', 'system'))
 );
 
-CREATE INDEX idx_memory_project_id ON memory(project_id);
-CREATE INDEX idx_memory_session_id ON memory(project_id, session_id);
-CREATE INDEX idx_memory_agent_id ON memory(project_id, agent_id);
-CREATE INDEX idx_memory_embedding ON memory USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-CREATE INDEX idx_memory_created_at ON memory(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_project_id ON memory(project_id);
+CREATE INDEX IF NOT EXISTS idx_memory_session_id ON memory(project_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_memory_agent_id ON memory(project_id, agent_id);
+CREATE INDEX IF NOT EXISTS idx_memory_embedding ON memory USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_memory_created_at ON memory(project_id, created_at DESC);
 
 -- ==========================================
 -- TABLES (NoSQL Tables)
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS tables (
     CONSTRAINT tables_project_name_unique UNIQUE (project_id, name)
 );
 
-CREATE INDEX idx_tables_project_id ON tables(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tables_project_id ON tables(project_id) WHERE deleted_at IS NULL;
 
 -- ==========================================
 -- TABLE ROWS (Dynamic NoSQL Data)
@@ -111,9 +111,9 @@ CREATE TABLE IF NOT EXISTS table_rows (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_table_rows_table_id ON table_rows(table_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_table_rows_project_id ON table_rows(project_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_table_rows_data ON table_rows USING gin(data);
+CREATE INDEX IF NOT EXISTS idx_table_rows_table_id ON table_rows(table_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_table_rows_project_id ON table_rows(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_table_rows_data ON table_rows USING gin(data);
 
 -- ==========================================
 -- FILES TABLE
@@ -132,9 +132,9 @@ CREATE TABLE IF NOT EXISTS files (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_files_project_id ON files(project_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_files_folder ON files(project_id, folder) WHERE deleted_at IS NULL;
-CREATE INDEX idx_files_created_at ON files(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_files_project_id ON files(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_files_folder ON files(project_id, folder) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_files_created_at ON files(project_id, created_at DESC);
 
 -- ==========================================
 -- EVENTS TABLE
@@ -151,10 +151,10 @@ CREATE TABLE IF NOT EXISTS events (
     CONSTRAINT events_event_type_check CHECK (char_length(event_type) > 0)
 );
 
-CREATE INDEX idx_events_project_id ON events(project_id);
-CREATE INDEX idx_events_event_type ON events(project_id, event_type);
-CREATE INDEX idx_events_timestamp ON events(project_id, timestamp DESC);
-CREATE INDEX idx_events_correlation_id ON events(correlation_id) WHERE correlation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project_id);
+CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(project_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(project_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events(correlation_id) WHERE correlation_id IS NOT NULL;
 
 -- ==========================================
 -- SYNC STATE TABLE
@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
     CONSTRAINT sync_state_direction_check CHECK (sync_direction IN ('push', 'pull', 'bidirectional'))
 );
 
-CREATE INDEX idx_sync_state_project_id ON sync_state(project_id);
+CREATE INDEX IF NOT EXISTS idx_sync_state_project_id ON sync_state(project_id);
 
 -- ==========================================
 -- CHANGE LOG TABLE (for CDC)
@@ -196,10 +196,10 @@ CREATE TABLE IF NOT EXISTS change_log (
     CONSTRAINT change_log_operation_check CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE'))
 );
 
-CREATE INDEX idx_change_log_project_id ON change_log(project_id);
-CREATE INDEX idx_change_log_entity ON change_log(project_id, entity_type, entity_id);
-CREATE INDEX idx_change_log_timestamp ON change_log(project_id, timestamp DESC);
-CREATE INDEX idx_change_log_synced ON change_log(project_id, synced) WHERE synced = FALSE;
+CREATE INDEX IF NOT EXISTS idx_change_log_project_id ON change_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_change_log_entity ON change_log(project_id, entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_change_log_timestamp ON change_log(project_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_change_log_synced ON change_log(project_id, synced) WHERE synced = FALSE;
 
 -- ==========================================
 -- SYNC HISTORY TABLE
@@ -219,8 +219,8 @@ CREATE TABLE IF NOT EXISTS sync_history (
     CONSTRAINT sync_history_status_check CHECK (status IN ('pending', 'running', 'completed', 'failed'))
 );
 
-CREATE INDEX idx_sync_history_project_id ON sync_history(project_id);
-CREATE INDEX idx_sync_history_started_at ON sync_history(project_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sync_history_project_id ON sync_history(project_id);
+CREATE INDEX IF NOT EXISTS idx_sync_history_started_at ON sync_history(project_id, started_at DESC);
 
 -- ==========================================
 -- CONFLICT LOG TABLE
@@ -240,9 +240,9 @@ CREATE TABLE IF NOT EXISTS conflict_log (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX idx_conflict_log_project_id ON conflict_log(project_id);
-CREATE INDEX idx_conflict_log_entity ON conflict_log(project_id, entity_type, entity_id);
-CREATE INDEX idx_conflict_log_created_at ON conflict_log(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conflict_log_project_id ON conflict_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_conflict_log_entity ON conflict_log(project_id, entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_conflict_log_created_at ON conflict_log(project_id, created_at DESC);
 
 -- ==========================================
 -- UPDATED_AT TRIGGER FUNCTION
@@ -256,22 +256,22 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Apply updated_at trigger to tables
-CREATE TRIGGER projects_updated_at BEFORE UPDATE ON projects
+CREATE OR REPLACE TRIGGER projects_updated_at BEFORE UPDATE ON projects
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER vectors_updated_at BEFORE UPDATE ON vectors
+CREATE OR REPLACE TRIGGER vectors_updated_at BEFORE UPDATE ON vectors
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER tables_updated_at BEFORE UPDATE ON tables
+CREATE OR REPLACE TRIGGER tables_updated_at BEFORE UPDATE ON tables
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER table_rows_updated_at BEFORE UPDATE ON table_rows
+CREATE OR REPLACE TRIGGER table_rows_updated_at BEFORE UPDATE ON table_rows
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER files_updated_at BEFORE UPDATE ON files
+CREATE OR REPLACE TRIGGER files_updated_at BEFORE UPDATE ON files
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER sync_state_updated_at BEFORE UPDATE ON sync_state
+CREATE OR REPLACE TRIGGER sync_state_updated_at BEFORE UPDATE ON sync_state
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ==========================================
@@ -292,7 +292,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER vector_change_trigger
+CREATE OR REPLACE TRIGGER vector_change_trigger
     AFTER INSERT OR UPDATE OR DELETE ON vectors
     FOR EACH ROW EXECUTE FUNCTION log_vector_change();
 
@@ -311,7 +311,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER table_row_change_trigger
+CREATE OR REPLACE TRIGGER table_row_change_trigger
     AFTER INSERT OR UPDATE OR DELETE ON table_rows
     FOR EACH ROW EXECUTE FUNCTION log_table_row_change();
 

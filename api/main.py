@@ -49,6 +49,7 @@ if is_lite_mode():
 
 from services.minio_service import minio_service
 from services import durability as durability_service
+from db.pg_migrations import apply_pending_migrations as apply_pending_pg_migrations
 
 # Environment variables
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -75,11 +76,22 @@ async def lifespan(app: FastAPI):
     print(f"API docs enabled: {ENABLE_DOCS}")
     print("=" * 60)
 
-    # MinIO bucket must exist before any upload/download/delete call —
-    # nothing else in the request path creates it (was a stubbed-out
-    # "# await init_minio()" no-op; every file upload failed with
-    # NoSuchBucket until this ran).
     if is_full_mode():
+        # Refs #121: schema.sql's post-"projects" statements (including
+        # change_log/sync_history/conflict_log's current shapes) never
+        # actually run against a real database -- see
+        # db/pg_migrations.py's module docstring for the full chain.
+        # Brings an existing Postgres database's schema forward; a no-op
+        # if it's already current. Must run before any request can reach
+        # /sync/* -- do it before yield, not lazily on first request.
+        import database as _database
+        with _database.engine.connect() as _conn:
+            apply_pending_pg_migrations(_conn)
+
+        # MinIO bucket must exist before any upload/download/delete call —
+        # nothing else in the request path creates it (was a stubbed-out
+        # "# await init_minio()" no-op; every file upload failed with
+        # NoSuchBucket until this ran).
         await minio_service.initialize_bucket()
 
     # Refs #107: launching DBOS also triggers its own automatic recovery
