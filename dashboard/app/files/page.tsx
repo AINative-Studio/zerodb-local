@@ -8,7 +8,7 @@ import { PageHeader, PageShell } from '@/components/layout/page-header'
 import { EmptyState, ErrorState, LoadingState, RequireProject } from '@/components/layout/states'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Button } from '@/components/ui/button'
-import { describeContentType, fileToBase64, saveBase64 } from '@/lib/files'
+import { MAX_UPLOAD_BYTES, describeContentType, exceedsUploadLimit, fileToBase64, saveBase64 } from '@/lib/files'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import type { StoredFile } from '@/types'
 
@@ -62,6 +62,17 @@ function FileManager({ projectId }: { projectId: string }) {
     // One at a time keeps memory flat: each file is base64-encoded in full.
     for (let i = 0; i < picked.length; i++) {
       const f = picked[i]
+      // Guard before encoding: the API has no server-side size limit and
+      // each file is base64-encoded in full in the browser before being
+      // posted in one JSON body, so a large file hangs the tab with no
+      // progress to show, rather than failing fast with a clear reason.
+      if (exceedsUploadLimit(f.size)) {
+        patch(items[i].key, {
+          state: 'error',
+          error: `Too large (${formatBytes(f.size)}). Limit is ${formatBytes(MAX_UPLOAD_BYTES)} per file.`,
+        })
+        continue
+      }
       try {
         await apiClient.uploadFile(projectId, {
           file_name: f.name,

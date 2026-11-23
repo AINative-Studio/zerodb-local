@@ -1,5 +1,17 @@
 /** The files API takes and returns base64 content in JSON bodies. */
 
+// The API has no server-side upload size limit (checked: api/routers/files.py),
+// and each file is base64-encoded in full in the browser before being posted
+// in one JSON body -- a large file can hang the tab during encoding or time
+// out the request, with no progress to show while it does. 10MB raw (~13.3MB
+// once base64-encoded) is a conservative client-side guard, not a real
+// capability ceiling; raise it if the real limit turns out to be higher.
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+export function exceedsUploadLimit(sizeBytes: number): boolean {
+  return sizeBytes > MAX_UPLOAD_BYTES
+}
+
 const CHUNK = 0x8000
 
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {

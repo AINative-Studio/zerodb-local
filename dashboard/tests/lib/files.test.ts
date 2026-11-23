@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { arrayBufferToBase64, base64ToBytes, describeContentType } from '@/lib/files'
+import { MAX_UPLOAD_BYTES, arrayBufferToBase64, base64ToBytes, describeContentType, exceedsUploadLimit } from '@/lib/files'
 
 describe('base64 helpers', () => {
   it('round-trips bytes', () => {
@@ -27,5 +27,17 @@ describe('describeContentType', () => {
 
   it('falls back to the raw type', () => {
     expect(describeContentType('application/x-thing')).toBe('application/x-thing')
+  })
+})
+
+describe('exceedsUploadLimit', () => {
+  it('allows a file at or under the limit', () => {
+    expect(exceedsUploadLimit(MAX_UPLOAD_BYTES)).toBe(false)
+    expect(exceedsUploadLimit(MAX_UPLOAD_BYTES - 1)).toBe(false)
+    expect(exceedsUploadLimit(0)).toBe(false)
+  })
+
+  it('rejects a file over the limit', () => {
+    expect(exceedsUploadLimit(MAX_UPLOAD_BYTES + 1)).toBe(true)
   })
 })
