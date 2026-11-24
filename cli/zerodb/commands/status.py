@@ -28,52 +28,58 @@ DOCKER_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 
 def parse_docker_compose_output(output: str) -> List[Dict[str, Any]]:
     """
-    Parse docker-compose ps output
+    Parse `docker compose ps --format json` output (newline-delimited JSON,
+    one object per container -- not a single JSON array).
+
+    Previously parsed plain-text `docker-compose ps` by splitting each line
+    on whitespace and taking the second token as "status" -- correct for
+    Compose V1's old column order, but Compose V2 (the version this
+    project's docker-compose.yml and README both target) puts IMAGE second
+    and STATUS fifth ("Up 21 minutes (healthy)", itself multiple
+    whitespace-separated words). That silently took the image name
+    (e.g. "zl-fullmode-zerodb-api") as every service's status, which in
+    turn made every "'running' in status.lower()" check below always
+    false -- confirmed live against a real, fully-healthy 7-service stack,
+    which `zerodb status status` reported as "0 of 7 services running".
+    JSON output sidesteps column-order parsing entirely.
 
     Args:
-        output: Raw output from docker-compose ps
+        output: Raw output from `docker compose ps --format json`
 
     Returns:
         list: Parsed service information
     """
     services = []
-    lines = output.strip().split('\n')
 
-    for line in lines[1:]:  # Skip header
+    for line in output.strip().split('\n'):
         if not line.strip():
             continue
-
-        parts = line.split()
-        if len(parts) < 2:
+        try:
+            container = json_lib.loads(line)
+        except json_lib.JSONDecodeError:
             continue
 
-        name = parts[0].replace('zerodb-', '')
-        status = parts[1] if len(parts) > 1 else 'unknown'
+        name = container.get('Service') or container.get('Name', '').replace('zerodb-', '')
+        status = container.get('Status', 'unknown')
+        health = (container.get('Health') or 'N/A').lower() or 'N/A'
+        if health not in ('healthy', 'unhealthy', 'starting'):
+            health = 'N/A'
 
-        # Extract health if present
-        health = 'N/A'
-        if 'healthy' in line.lower():
-            health = 'healthy'
-        elif 'unhealthy' in line.lower():
-            health = 'unhealthy'
-        elif 'starting' in line.lower():
-            health = 'starting'
-
-        # Extract port
+        # Extract the first published host port, if any.
         port = None
-        if '->' in line:
-            port_parts = line.split('->')
-            if len(port_parts) > 1:
-                try:
-                    port = int(port_parts[0].split(':')[-1])
-                except:
-                    pass
+        ports = container.get('Ports', '')
+        if '->' in ports:
+            try:
+                port = int(ports.split('->')[0].split(':')[-1])
+            except (ValueError, IndexError):
+                pass
 
         services.append({
             'name': name,
             'status': status,
             'health': health,
-            'port': port
+            'port': port,
+            'state': container.get('State', ''),
         })
 
     return services
@@ -165,7 +171,7 @@ def get_all_services_status() -> Dict[str, Any]:
     """
     try:
         result = subprocess.run(
-            ["docker-compose", "-f", str(DOCKER_COMPOSE_FILE), "ps"],
+            ["docker-compose", "-f", str(DOCKER_COMPOSE_FILE), "ps", "--format", "json"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -177,7 +183,11 @@ def get_all_services_status() -> Dict[str, Any]:
         return {
             'services': services,
             'total': len(services),
-            'running': sum(1 for s in services if 'running' in s['status'].lower())
+            # Compose's real Status text is "Up 21 minutes (healthy)" --
+            # never contains the word "running" -- so this must key off
+            # the structured State field ("running"/"exited"/...), not a
+            # substring match against Status.
+            'running': sum(1 for s in services if s['state'] == 'running')
         }
     except:
         return {'services': [], 'total': 0, 'running': 0}
@@ -195,7 +205,7 @@ def get_service_status(service_name: str) -> Dict[str, Any]:
     """
     try:
         result = subprocess.run(
-            ["docker-compose", "-f", str(DOCKER_COMPOSE_FILE), "ps", service_name],
+            ["docker-compose", "-f", str(DOCKER_COMPOSE_FILE), "ps", "--format", "json", service_name],
             capture_output=True,
             text=True,
             timeout=10,
@@ -265,10 +275,13 @@ def status(
             resource_usage = get_resource_usage()
 
         for svc in all_status['services']:
-            # Status with color
-            if 'running' in svc['status'].lower():
+            # Status with color, keyed off the structured State field --
+            # see parse_docker_compose_output()'s docstring for why a
+            # substring match against the free-text Status ("Up 21
+            # minutes (healthy)") doesn't work.
+            if svc['state'] == 'running':
                 status_colored = f"[green]{svc['status']}[/green]"
-            elif 'exited' in svc['status'].lower():
+            elif svc['state'] == 'exited':
                 status_colored = f"[red]{svc['status']}[/red]"
             else:
                 status_colored = f"[yellow]{svc['status']}[/yellow]"

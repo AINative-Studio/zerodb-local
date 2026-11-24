@@ -45,12 +45,20 @@ class TestStatusCommand:
         """Should display status of all services"""
         from zerodb.commands.status import app
 
+        # Refs #124: real `docker compose ps --format json` output, not
+        # the plain-text format this test previously mocked (which never
+        # matched either real Compose generation's actual `ps` output).
+        stdout = (
+            '{"Service": "postgres", "Name": "zerodb-postgres", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:5432->5432/tcp"}\n'
+            '{"Service": "api", "Name": "zerodb-api", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:8000->8000/tcp"}'
+        )
         with patch('zerodb.commands.status.check_docker_installed', return_value=True):
             with patch('subprocess.run') as mock_run:
-                mock_run.return_value = Mock(
-                    returncode=0,
-                    stdout="NAME STATUS\nzerodb-postgres running\nzerodb-api running"
-                )
+                mock_run.return_value = Mock(returncode=0, stdout=stdout)
 
                 result = runner.invoke(app)
 
@@ -61,13 +69,23 @@ class TestStatusCommand:
         """Should show health check status for each service"""
         from zerodb.commands.status import app
 
+        # Refs #124: the `status` command's table path never calls
+        # get_service_health() -- it reads Health straight out of
+        # get_all_services_status(), which itself comes from parsing
+        # `docker compose ps --format json`'s own Health field (this test
+        # previously mocked a function the real code path doesn't use,
+        # so it was testing nothing).
+        stdout = (
+            '{"Service": "postgres", "Name": "zerodb-postgres", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:5432->5432/tcp"}\n'
+            '{"Service": "qdrant", "Name": "zerodb-qdrant", '
+            '"Status": "Up 5 minutes", "State": "starting", '
+            '"Health": "starting", "Ports": "0.0.0.0:6333->6333/tcp"}'
+        )
         with patch('zerodb.commands.status.check_docker_installed', return_value=True):
-            with patch('zerodb.commands.status.get_service_health') as mock_health:
-                mock_health.return_value = {
-                    'postgres': 'healthy',
-                    'api': 'healthy',
-                    'qdrant': 'starting'
-                }
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value = Mock(returncode=0, stdout=stdout)
 
                 result = runner.invoke(app)
 
@@ -77,12 +95,21 @@ class TestStatusCommand:
         """Should display port mappings for services"""
         from zerodb.commands.status import app
 
+        # Refs #124: get_service_info() was never a real function in
+        # status.py -- this test mocked something the implementation
+        # doesn't have, so it never actually exercised the real port-
+        # display path (parse_docker_compose_output()'s Ports parsing).
+        stdout = (
+            '{"Service": "postgres", "Name": "zerodb-postgres", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:5432->5432/tcp"}\n'
+            '{"Service": "api", "Name": "zerodb-api", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:8000->8000/tcp"}'
+        )
         with patch('zerodb.commands.status.check_docker_installed', return_value=True):
-            with patch('zerodb.commands.status.get_service_info') as mock_info:
-                mock_info.return_value = {
-                    'postgres': {'port': 5432, 'status': 'running'},
-                    'api': {'port': 8000, 'status': 'running'}
-                }
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value = Mock(returncode=0, stdout=stdout)
 
                 result = runner.invoke(app)
 
@@ -141,9 +168,15 @@ class TestStatusCommand:
         """Should allow checking status of specific service"""
         from zerodb.commands.status import app
 
+        # Refs #124: the real single-service display path reads
+        # status_data['name'] and status_data['port'] (see status()'s
+        # `if service:` branch) -- the mocked dict here was missing both,
+        # so this never actually exercised what it claimed to test.
         with patch('zerodb.commands.status.check_docker_installed', return_value=True):
             with patch('zerodb.commands.status.get_service_status') as mock_status:
-                mock_status.return_value = {'status': 'running', 'health': 'healthy'}
+                mock_status.return_value = {
+                    'name': 'postgres', 'status': 'running', 'health': 'healthy', 'port': 5432,
+                }
 
                 result = runner.invoke(app, ["postgres"])
 
@@ -154,16 +187,29 @@ class TestStatusCommand:
         """Should display CPU and memory usage"""
         from zerodb.commands.status import app
 
+        # Refs #124: get_resource_usage() alone isn't enough -- `status
+        # --resources` only reaches the resources table once
+        # get_all_services_status() (backed by a real `docker compose ps`
+        # subprocess call) returns at least one service; the previous
+        # version of this test left that unmocked, so it hit the "No
+        # services running" early-return before ever touching resources.
+        stdout = (
+            '{"Service": "postgres", "Name": "zerodb-postgres", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:5432->5432/tcp"}'
+        )
         with patch('zerodb.commands.status.check_docker_installed', return_value=True):
-            with patch('zerodb.commands.status.get_resource_usage') as mock_usage:
-                mock_usage.return_value = {
-                    'postgres': {'cpu': '2%', 'memory': '150MB'},
-                    'api': {'cpu': '5%', 'memory': '200MB'}
-                }
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value = Mock(returncode=0, stdout=stdout)
+                with patch('zerodb.commands.status.get_resource_usage') as mock_usage:
+                    mock_usage.return_value = {
+                        'postgres': {'cpu': '2%', 'memory': '150MB'},
+                        'api': {'cpu': '5%', 'memory': '200MB'}
+                    }
 
-                result = runner.invoke(app, ["--resources"])
+                    result = runner.invoke(app, ["--resources"])
 
-                assert "cpu" in result.stdout.lower() or "memory" in result.stdout.lower()
+                    assert "cpu" in result.stdout.lower() or "memory" in result.stdout.lower()
 
 
 # ===== Logs Command Tests =====
@@ -382,31 +428,80 @@ class TestHelperFunctions:
         """Should get status of all services"""
         from zerodb.commands.status import get_all_services_status
 
+        # Refs #124: real `docker compose ps --format json` output --
+        # newline-delimited JSON objects, not plain text. The previous
+        # version of this test mocked plain-text stdout that didn't match
+        # either Compose generation's real `ps` output, which is exactly
+        # how the whitespace-column-parsing bug this now tests against
+        # went unnoticed.
+        stdout = (
+            '{"Service": "postgres", "Name": "zerodb-postgres", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:5432->5432/tcp"}\n'
+            '{"Service": "api", "Name": "zerodb-api", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:8000->8000/tcp"}'
+        )
         with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout="zerodb-postgres running\nzerodb-api running"
-            )
+            mock_run.return_value = Mock(returncode=0, stdout=stdout)
 
             status = get_all_services_status()
 
             assert 'postgres' in str(status)
             assert 'api' in str(status)
+            assert status['total'] == 2
+            # Refs #124: this is the actual regression -- "running" was
+            # never 0 of N despite every container really being up and
+            # healthy, because the old parser took the Compose V2 IMAGE
+            # column for "status" and then substring-matched it for the
+            # word "running", which real Compose Status text never
+            # contains ("Up X minutes (healthy)").
+            assert status['running'] == 2
 
     def test_parse_docker_compose_output(self):
-        """Should parse docker-compose ps output correctly"""
+        """Should parse `docker compose ps --format json` output correctly"""
         from zerodb.commands.status import parse_docker_compose_output
 
-        output = """NAME STATUS PORTS
-zerodb-postgres running 0.0.0.0:5432->5432/tcp
-zerodb-api running (healthy) 0.0.0.0:8000->8000/tcp
-"""
+        # One JSON object per line, matching real `docker compose ps
+        # --format json` -- captured against a real running stack. Refs #124.
+        output = (
+            '{"Service": "postgres", "Name": "zerodb-postgres", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:5432->5432/tcp"}\n'
+            '{"Service": "api", "Name": "zerodb-api", '
+            '"Status": "Up 5 minutes (healthy)", "State": "running", '
+            '"Health": "healthy", "Ports": "0.0.0.0:8000->8000/tcp"}'
+        )
 
         result = parse_docker_compose_output(output)
 
-        assert len(result) >= 2
+        assert len(result) == 2
         assert result[0]['name'] == 'postgres'
         assert result[0]['port'] == 5432
+        assert result[0]['status'] == 'Up 5 minutes (healthy)'
+        assert result[0]['health'] == 'healthy'
+        assert result[0]['state'] == 'running'
+
+    def test_parse_docker_compose_output_service_without_healthcheck(self):
+        """
+        A service with no healthcheck defined (e.g. this project's qdrant
+        and dashboard services) has an empty Health field in real `docker
+        compose ps --format json` output, not "healthy"/"unhealthy" --
+        must report 'N/A', not an empty string or a crash. Refs #124.
+        """
+        from zerodb.commands.status import parse_docker_compose_output
+
+        output = (
+            '{"Service": "qdrant", "Name": "zerodb-qdrant", '
+            '"Status": "Up 5 minutes", "State": "running", '
+            '"Health": "", "Ports": "0.0.0.0:6333->6333/tcp"}'
+        )
+
+        result = parse_docker_compose_output(output)
+
+        assert len(result) == 1
+        assert result[0]['health'] == 'N/A'
+        assert result[0]['state'] == 'running'
 
     def test_check_service_running(self):
         """Should check if a specific service is running"""
@@ -434,12 +529,20 @@ class TestCommandsIntegration:
         # This tests the integration between init and status commands
         # In real scenario, services would be running
 
+        # Refs #124: the table-rendering path reads health/port/state off
+        # every service dict (see status()'s `for svc in
+        # all_status['services']` loop) -- a dict missing them, as this
+        # mock previously was, crashes with a KeyError the moment real
+        # code (not just this test) hits that gap.
         with patch('zerodb.commands.status.check_docker_installed', return_value=True):
             with patch('zerodb.commands.status.get_all_services_status') as mock_status:
                 mock_status.return_value = {
                     'services': [
-                        {'name': 'postgres', 'status': 'running'}
-                    ]
+                        {'name': 'postgres', 'status': 'Up 5 minutes (healthy)',
+                         'health': 'healthy', 'port': 5432, 'state': 'running'}
+                    ],
+                    'total': 1,
+                    'running': 1,
                 }
 
                 from zerodb.commands.status import app
