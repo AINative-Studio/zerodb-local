@@ -10,6 +10,7 @@ Tests sync plan storage and retrieval functionality including:
 - Plan status management
 """
 import pytest
+from sqlalchemy import text
 from uuid import UUID, uuid4
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
@@ -19,6 +20,7 @@ from models.sync_plan import SyncPlan as SyncPlanModel
 from schemas.sync_orchestrator import (
     SyncPlan as SyncPlanSchema,
     SyncStep,
+    SyncWarning,
     EntityCount,
     SchemaChangeInfo,
     ConflictInfo,
@@ -34,11 +36,26 @@ def sync_plan_service():
     return SyncPlanService(plan_ttl_hours=1)
 
 
+def _create_real_project(db) -> UUID:
+    """
+    Refs #129: sync_plans.project_id has a real FK to projects(id) --
+    previously silently unenforceable (every insert crashed before the
+    constraint was ever reached, see #129's root cause), now a real
+    constraint. A random uuid4() project_id (this fixture's previous
+    behavior) violates it; these fixtures need an actual project row.
+    """
+    return db.execute(text(
+        "INSERT INTO projects (name, user_id) VALUES "
+        "('sync-plan-persistence-test', '00000000-0000-0000-0000-000000000001') "
+        "RETURNING id"
+    )).scalar()
+
+
 @pytest.fixture
-def sample_sync_plan():
+def sample_sync_plan(db):
     """Sample sync plan for testing"""
     plan_id = uuid4()
-    project_id = uuid4()
+    project_id = _create_real_project(db)
 
     return SyncPlanSchema(
         plan_id=plan_id,
@@ -97,10 +114,10 @@ def sample_sync_plan():
 
 
 @pytest.fixture
-def sample_approval_required_plan():
+def sample_approval_required_plan(db):
     """Sample sync plan that requires approval"""
     plan_id = uuid4()
-    project_id = uuid4()
+    project_id = _create_real_project(db)
 
     return SyncPlanSchema(
         plan_id=plan_id,
@@ -131,21 +148,20 @@ def sample_approval_required_plan():
             conflicts=[],
             resolution_strategy=ConflictResolutionStrategy.NEWEST_WINS
         ),
-        warnings=["Breaking schema changes require approval"],
+        # Refs #129: SyncWarning is a structured model (severity/message/
+        # category), not a bare string -- this fixture was never actually
+        # instantiated before (its whole test class was blanket-skipped),
+        # so this pre-existing shape mismatch was never caught.
+        warnings=[SyncWarning(
+            severity="high",
+            message="Breaking schema changes require approval",
+            category="schema",
+        )],
         requires_approval=True,
         can_rollback=True
     )
 
 
-@pytest.mark.skip(
-    reason="sync_plans table now exists (Refs #127) but every ORM insert "
-    "against it still raises sqlalchemy.exc.NoReferencedTableError -- "
-    "ForeignKey('projects.id') can't resolve because there is no ORM "
-    "model for `projects` registered in any model file's own isolated "
-    "declarative_base(). A systemic bug across multiple models (Refs "
-    "#129), not specific to sync_plans -- out of scope for #127 to fix. "
-    "Remove this skip once #129 lands."
-)
 class TestSyncPlanService:
     """Test suite for SyncPlanService"""
 
@@ -372,14 +388,20 @@ class TestSyncPlanService:
         """Test cleaning up old completed plans"""
         # Save and complete a plan
         saved_plan = sync_plan_service.save_plan(db, sample_sync_plan)
-        sync_plan_service.mark_executing(db, saved_plan.plan_id)
-        sync_plan_service.mark_completed(db, saved_plan.plan_id, uuid4())
+        # Capture plan_id now -- cleanup_old_plans() below deletes the row
+        # via raw SQL (bypassing the ORM), and SQLAlchemy's default
+        # expire_on_commit means every attribute on saved_plan is reloaded
+        # from the database on next access after any commit; reading
+        # saved_plan.plan_id after that delete raises ObjectDeletedError.
+        plan_id = saved_plan.plan_id
+        sync_plan_service.mark_executing(db, plan_id)
+        sync_plan_service.mark_completed(db, plan_id, uuid4())
 
         # Manually set creation date to old
         from sqlalchemy import text
         db.execute(
             text("UPDATE sync_plans SET created_at = :created WHERE plan_id = :id"),
-            {"created": datetime.utcnow() - timedelta(days=31), "id": str(saved_plan.plan_id)}
+            {"created": datetime.utcnow() - timedelta(days=31), "id": str(plan_id)}
         )
         db.commit()
 
@@ -389,22 +411,34 @@ class TestSyncPlanService:
         assert deleted_count == 1
 
         # Verify plan is deleted
-        plan = sync_plan_service.get_plan_by_id(db, saved_plan.plan_id)
+        plan = sync_plan_service.get_plan_by_id(db, plan_id)
         assert plan is None
 
 
 @pytest.mark.skip(
-    reason="see TestSyncPlanService's skip reason above. Refs #127, #129."
+    reason="sync_orchestrator.py's routes depend on database.get_db "
+    "directly instead of database_service.get_db (the one this test "
+    "suite's `client` fixture overrides to share its transaction) -- a "
+    "project created via client.post('/v1/projects', ...) is invisible "
+    "to these endpoints' own, separate DB session, so every one of these "
+    "hits a real FK violation or 404 even though the project genuinely "
+    "exists. Pre-existing, not specific to sync_plans -- filed as #132. "
+    "Remove this skip once #132 lands."
 )
 class TestSyncPlanAPI:
     """Test suite for sync plan API endpoints"""
 
     @pytest.mark.asyncio
-    async def test_plan_sync_saves_to_database(self, client, db, test_project_id):
+    async def test_plan_sync_saves_to_database(self, client, db, sample_project_data):
         """Test that planning a sync saves plan to database"""
+        # Refs #129: sync_plans.project_id now has a real, enforced FK to
+        # projects(id) -- this needs an actual project row, not just a
+        # random test_project_id UUID.
+        project_id = client.post("/v1/projects", json=sample_project_data).json()["id"]
+
         # Make request to plan sync
         response = client.post(
-            f"/v1/projects/{test_project_id}/sync/plan",
+            f"/v1/projects/{project_id}/sync/plan",
             json={
                 "direction": "push",
                 "entity_types": ["tables", "vectors"],
@@ -420,20 +454,22 @@ class TestSyncPlanAPI:
         # Verify plan was saved to database
         service = SyncPlanService()
         plan_id = UUID(plan_data["plan_id"])
-        saved_plan = service.get_plan_by_id(db, plan_id, UUID(test_project_id))
+        saved_plan = service.get_plan_by_id(db, plan_id, UUID(project_id))
 
         assert saved_plan is not None
         assert saved_plan.status == 'pending'
 
     @pytest.mark.asyncio
-    async def test_execute_sync_retrieves_plan_from_database(self, client, db, test_project_id):
+    async def test_execute_sync_retrieves_plan_from_database(self, client, db, sample_project_data):
         """Test that executing sync retrieves plan from database"""
+        project_id = client.post("/v1/projects", json=sample_project_data).json()["id"]
+
         # First create a plan
         service = SyncPlanService()
 
         plan = SyncPlanSchema(
             plan_id=uuid4(),
-            project_id=UUID(test_project_id),
+            project_id=UUID(project_id),
             direction=SyncDirection.PUSH,
             created_at=datetime.utcnow(),
             steps=[
@@ -469,7 +505,7 @@ class TestSyncPlanAPI:
 
         # Execute the plan
         response = client.post(
-            f"/v1/projects/{test_project_id}/sync/execute",
+            f"/v1/projects/{project_id}/sync/execute",
             json={
                 "plan_id": str(saved_plan.plan_id),
                 "approved": False,
@@ -481,18 +517,20 @@ class TestSyncPlanAPI:
         assert response.status_code == 200
 
         # Check plan status was updated
-        updated_plan = service.get_plan_by_id(db, saved_plan.plan_id, UUID(test_project_id))
+        updated_plan = service.get_plan_by_id(db, saved_plan.plan_id, UUID(project_id))
         assert updated_plan.status in ['executing', 'completed', 'failed']
 
     @pytest.mark.asyncio
-    async def test_validate_sync_plan_retrieves_from_database(self, client, db, test_project_id):
+    async def test_validate_sync_plan_retrieves_from_database(self, client, db, sample_project_data):
         """Test that validating sync plan retrieves from database"""
+        project_id = client.post("/v1/projects", json=sample_project_data).json()["id"]
+
         # Create a plan
         service = SyncPlanService()
 
         plan = SyncPlanSchema(
             plan_id=uuid4(),
-            project_id=UUID(test_project_id),
+            project_id=UUID(project_id),
             direction=SyncDirection.PUSH,
             created_at=datetime.utcnow(),
             steps=[],
@@ -520,7 +558,7 @@ class TestSyncPlanAPI:
 
         # Validate the plan
         response = client.post(
-            f"/v1/projects/{test_project_id}/sync/validate",
+            f"/v1/projects/{project_id}/sync/validate",
             params={"plan_id": str(saved_plan.plan_id)}
         )
 

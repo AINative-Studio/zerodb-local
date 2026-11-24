@@ -6,13 +6,12 @@ from datetime import datetime
 from uuid import UUID, uuid4
 from sqlalchemy import Column, String, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
+from database import Base
+from models.project import Project  # noqa: F401 -- registers `projects` on Base.metadata so ForeignKey('projects.id') below resolves. Refs #129.
 from models.types import LiteCompatibleDateTime as DateTime
 from models.types import LiteCompatibleUUID
-
-Base = declarative_base()
 
 
 class SyncState(Base):
