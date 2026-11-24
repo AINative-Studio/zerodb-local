@@ -3,16 +3,15 @@ SQLAlchemy model for sync history and audit logging
 """
 from sqlalchemy import Column, String, Integer, BigInteger, Text, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from uuid import uuid4
 import uuid
 
+from database import Base
+from models.project import Project  # noqa: F401 -- registers `projects` on Base.metadata so ForeignKey('projects.id') below resolves. Refs #129.
 from models.types import LiteCompatibleDateTime as TIMESTAMP
 from models.types import LiteCompatibleUUID
-
-Base = declarative_base()
 
 
 class SyncHistory(Base):

@@ -15,6 +15,7 @@ from schemas.sync_orchestrator import (
     SyncExecuteRequest,
     ValidationResult,
     RollbackResult,
+    SyncStatus,
     SyncStatusResponse,
     SyncDirection,
     EntityType,
