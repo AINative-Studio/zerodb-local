@@ -40,7 +40,20 @@ a = Analysis(
     [str(API_ROOT / "main.py")],
     pathex=[str(API_ROOT)],
     binaries=[],
-    datas=[],
+    # Refs #141 (desktop ship plan): PyInstaller only bundles Python modules
+    # by default -- non-.py data files read via a runtime os.path.join are
+    # invisible to its static analysis and silently absent from the onefile
+    # build. Confirmed directly in CI: lite/services/database_service_lite.py
+    # reads lite/db/schema_lite.sql relative to its own __file__ at startup,
+    # and the first real smoke-test run failed with
+    # "FileNotFoundError: ... lite/db/schema_lite.sql" the moment the server
+    # tried to initialize its SQLite schema. Bundled at the same relative
+    # path (lite/db/schema_lite.sql) it's read from, matching the real repo
+    # layout lite/services/database_service_lite.py's __file__-relative
+    # resolution expects.
+    datas=[
+        (str(REPO_ROOT / "lite" / "db" / "schema_lite.sql"), "lite/db"),
+    ],
     hiddenimports=[
         # FastAPI/uvicorn/starlette pull in a long tail of modules via
         # dynamic import that PyInstaller's static analysis misses --
