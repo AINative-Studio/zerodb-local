@@ -33,7 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security (before copying files)
-RUN useradd -m -u 1000 zerodb
+# Refs #126: also added to the root group -- Docker Desktop (Mac/Windows)
+# always presents the mounted /var/run/docker.sock inside the container as
+# root:root, mode 660, regardless of its ownership on the host, so a
+# non-root, non-root-group user gets PermissionError connecting to it (the
+# Logs page's real-log-reading feature depends on this socket). This
+# doesn't make the container run as root -- it only grants access to
+# files/sockets whose Unix permissions already allow the root group.
+RUN useradd -m -u 1000 -G root zerodb
 
 # Copy Python dependencies from builder stage to zerodb user home
 COPY --from=builder /root/.local /home/zerodb/.local

@@ -234,6 +234,17 @@ services:
     volumes:
       - ./api:/app
       - ./lite:/app/lite
+      # Refs #126: the Logs page's /v1/logs endpoint reads real per-service
+      # container logs via the Docker Engine API (api/routers/logs.py) --
+      # without this socket there is no way for a process inside this
+      # container to read any other container's logs, which is what
+      # previously made that endpoint always fall back to fabricated data.
+      # This grants zerodb-api full Docker Engine control on the host (not
+      # just log reads), acceptable here because full mode is an explicitly
+      # local-only, single-user tool with no non-loopback exposure by
+      # default (see ZERODB_BIND_ADDRESS above) -- don't copy this mount to
+      # a service that's any more exposed than that.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "${ZERODB_BIND_ADDRESS:-127.0.0.1}:${ZERODB_API_PORT:-8000}:8000"
     networks:

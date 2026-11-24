@@ -87,11 +87,21 @@ class TestDockerBuild:
         """
         GIVEN: Dockerfile should create non-root user
         WHEN: Reading Dockerfile content
-        THEN: Should contain useradd command for zerodb user
+        THEN: Should contain useradd command for zerodb user, and run as
+        that user (not root) at container start
+
+        Refs #126: zerodb is also added to the root group so it can read
+        /var/run/docker.sock (always root:root mode 660 inside a container
+        on Docker Desktop, regardless of host ownership) for the Logs
+        page's real container-log reads -- this is a group grant for one
+        specific socket's permissions, not running the process as root;
+        `USER zerodb` (not `USER root`) is the actual non-root guarantee
+        this test checks.
         """
         content = dockerfile_path.read_text()
 
-        assert "useradd -m -u 1000 zerodb" in content
+        assert "useradd -m -u 1000" in content
+        assert "zerodb" in content
         assert "USER zerodb" in content
 
     def test_dockerfile_sets_correct_path(self, dockerfile_path):
