@@ -42,47 +42,49 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Set up Python (sidecar)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Python deps + PyInstaller
-        run: pip install -e ".[lite]" pyinstaller
-
       # Refs #141 (desktop ship plan, EPIC-A): `tauri build --target
       # universal-apple-darwin` requires an externalBin for BOTH
       # architectures (binaries/zerodb-server-aarch64-apple-darwin AND
       # -x86_64-apple-darwin) -- it lipo's them together itself. Built
       # here rather than committed to git: a real PyInstaller onefile
       # binary is ~250MB, which has no business living in version
-      # control. macos-latest runners are arm64 natively; the x86_64
-      # build runs under Rosetta via `arch -x86_64` with an x86_64
-      # Python interpreter installed for that purpose.
+      # control.
+      #
+      # x86_64 leg built FIRST, before the native arm64 setup-python step
+      # below changes `python`/`python3` on PATH: actions/setup-python's
+      # `architecture: x64` input downloads a real x64 CPython build (not
+      # the ancient macOS-system Python) and relies on the OS routing it
+      # through Rosetta transparently -- no `arch -x86_64` wrapper needed,
+      # and critically a modern pip/3.12, unlike a hand-rolled venv off
+      # `/usr/bin/python3` (confirmed directly: that one resolves to
+      # system Python 3.9.6, which fails this repo's `requires-python
+      # >=3.10`, and ships pip 21.2.4, which predates PEP 660 editable
+      # installs for pyproject.toml-only/hatchling projects).
+      - name: Set up Python 3.12 (x86_64, for the Intel sidecar build)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Build sidecar binary (x86_64)
+        run: |
+          python3 -c "import platform; print('machine:', platform.machine())"
+          pip install -e ".[lite]" pyinstaller
+          pyinstaller desktop/zerodb-server.spec --distpath /tmp/pyi-dist-x86 --workpath /tmp/pyi-build-x86
+          mv /tmp/pyi-dist-x86/zerodb-server desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin
+
+      - name: Set up Python 3.12 (arm64, native)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
       - name: Build sidecar binary (arm64, native)
         run: |
+          python3 -c "import platform; print('machine:', platform.machine())"
+          pip install -e ".[lite]" pyinstaller
           pyinstaller desktop/zerodb-server.spec --distpath desktop/src-tauri/binaries --workpath /tmp/pyi-build-arm64
           mv desktop/src-tauri/binaries/zerodb-server desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin
-
-      - name: Install x86_64 Python (Rosetta) for the Intel sidecar build
-        run: |
-          softwareupdate --install-rosetta --agree-to-license
-          arch -x86_64 /usr/bin/python3 -m venv /tmp/x86-venv || arch -x86_64 python3 -m venv /tmp/x86-venv
-          # The system/Rosetta Python's bundled pip (21.2.4 on this runner image)
-          # predates PEP 660 editable installs for pyproject.toml-only projects
-          # (no setup.py) -- confirmed directly: "File 'setup.py' or 'setup.cfg'
-          # not found... editable mode currently requires a setuptools-based
-          # build." Upgrading pip inside the venv first fixes it, same as the
-          # arm64 leg already gets for free from actions/setup-python's modern
-          # pip.
-          arch -x86_64 /tmp/x86-venv/bin/pip install --upgrade pip
-          arch -x86_64 /tmp/x86-venv/bin/pip --version
-
-      - name: Build sidecar binary (x86_64, via Rosetta)
-        run: |
-          arch -x86_64 /tmp/x86-venv/bin/pip install -e ".[lite]" pyinstaller
-          arch -x86_64 /tmp/x86-venv/bin/pyinstaller desktop/zerodb-server.spec --distpath /tmp/pyi-dist-x86 --workpath /tmp/pyi-build-x86
-          mv /tmp/pyi-dist-x86/zerodb-server desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin
 
       - name: Smoke-test both sidecar binaries
         run: |
