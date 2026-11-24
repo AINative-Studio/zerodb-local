@@ -60,3 +60,8 @@ mypy>=1.7.0
 # Utilities
 python-dateutil>=2.8.2
 pytz>=2024.1
+
+# Docker Engine API client (Refs #126: real container log reads for the
+# full-mode Logs page -- requires docker-compose.yml's zerodb-api service
+# to mount /var/run/docker.sock)
+docker>=7.0.0
