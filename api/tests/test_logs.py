@@ -2,9 +2,110 @@
 Tests for Logs Router
 Validates log retrieval, filtering, and display functionality
 """
+import os
+import sys
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from routers.logs import parse_docker_logs, _extract_level  # noqa: E402
+
+
+class TestExtractLevel:
+    """
+    Refs #126: _extract_level() replaces the previous version's fabricated
+    severity assignment (random, independent of message content) -- these
+    verify it reads the real level each service's own log format states,
+    across the different formats this project's services actually use.
+    """
+
+    def test_postgres_format(self):
+        assert _extract_level(
+            "2026-11-23 23:41:30.636 UTC [243] ERROR:  null value in column"
+        ) == "ERROR"
+
+    def test_postgres_log_level_is_not_error(self):
+        # Postgres's routine checkpoint messages use "LOG:", not "ERROR:" --
+        # a naive substring match for the word "log" (case-insensitively)
+        # would have falsely flagged these as some kind of error-adjacent
+        # entry; this must fall through to the plain-INFO default instead.
+        assert _extract_level("2026-11-23 23:44:28.678 UTC [71] LOG:  checkpoint starting: time") == "INFO"
+
+    def test_uvicorn_info_format(self):
+        assert _extract_level('INFO:     127.0.0.1:56020 - "GET /health HTTP/1.1" 200 OK') == "INFO"
+
+    def test_warn_alias_normalized(self):
+        assert _extract_level("WARN: disk space low") == "WARNING"
+
+    def test_fatal_alias_normalized(self):
+        assert _extract_level("FATAL: connection refused") == "CRITICAL"
+
+    def test_no_level_token_defaults_to_info(self):
+        # Matches a Postgres DETAIL/STATEMENT continuation line for an
+        # error already reported on the preceding line -- shouldn't itself
+        # be flagged as an error.
+        assert _extract_level('STATEMENT:  INSERT INTO conflict_log (id, project_id) VALUES (...)') == "INFO"
+
+
+class TestParseDockerLogs:
+    """
+    Refs #126: parse_docker_logs() now reads real container logs via the
+    Docker Engine API (docker.from_env()) instead of shelling out to a
+    `docker` CLI binary that can never exist inside the zerodb-api
+    container itself, and no longer falls back to fabricated data on
+    failure.
+    """
+
+    def test_parses_real_container_log_format(self):
+        mock_container = MagicMock()
+        mock_container.logs.return_value = (
+            b"2026-11-23T23:44:28.678555631Z 2026-11-23 23:44:28.678 UTC [71] LOG:  checkpoint starting: time\n"
+            b'2026-11-23T23:44:49.513199543Z INFO:     127.0.0.1:1 - "GET /health HTTP/1.1" 200 OK\n'
+        )
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("routers.logs._get_docker_client", return_value=mock_client):
+            entries = parse_docker_logs("postgres", limit=10)
+
+        assert len(entries) == 2
+        assert entries[0].service == "postgres"
+        assert entries[0].source == "zerodb-postgres"
+        assert entries[0].level == "INFO"  # "LOG:", not "ERROR:"
+        assert "checkpoint starting" in entries[0].message
+        assert entries[0].timestamp.tzinfo is None  # Refs #126: naive, comparable to get_logs()'s cutoff_time
+        mock_client.containers.get.assert_called_once_with("zerodb-postgres")
+
+    def test_unreachable_container_returns_empty_list_not_fake_data(self):
+        """
+        The single most important regression test for #126: a container
+        that can't be reached (no socket, wrong name, container not
+        running) must return an empty list, never fabricated log entries.
+        """
+        mock_client = MagicMock()
+        mock_client.containers.get.side_effect = Exception("No such container")
+
+        with patch("routers.logs._get_docker_client", return_value=mock_client):
+            entries = parse_docker_logs("postgres", limit=10)
+
+        assert entries == []
+
+    def test_blank_lines_skipped(self):
+        mock_container = MagicMock()
+        mock_container.logs.return_value = (
+            b"2026-11-23T23:44:28.678555631Z INFO: real line\n\n\n"
+        )
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("routers.logs._get_docker_client", return_value=mock_client):
+            entries = parse_docker_logs("api", limit=10)
+
+        assert len(entries) == 1
 
 
 @pytest.mark.asyncio
@@ -250,7 +351,10 @@ class TestLogsIntegration:
             assert response.status_code == 200
             data = response.json()
 
-            # Should have logs from the service (using synthetic data)
+            # Refs #126: real logs now (via the Docker Engine API), empty
+            # list (not fabricated data) when no container is reachable --
+            # this test environment has no Docker socket, so the list is
+            # expected to be empty, just a valid empty list.
             assert isinstance(data["logs"], list)
 
     def test_logs_filtering_combination(self, client: TestClient):

@@ -7,10 +7,14 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 import logging
-import subprocess
 import re
 
 router = APIRouter()
+
+_LEVEL_PATTERN = re.compile(
+    r"\b(CRITICAL|FATAL|ERROR|WARN(?:ING)?|INFO|DEBUG)\b", re.IGNORECASE
+)
+_LEVEL_ALIASES = {"WARN": "WARNING", "FATAL": "CRITICAL"}
 
 
 class LogEntry(BaseModel):
@@ -32,164 +36,114 @@ class LogsResponse(BaseModel):
     time_range_end: datetime
 
 
+# Refs #126: zerodb-api runs inside a Docker container with neither the
+# `docker` CLI binary nor /var/run/docker.sock mounted by default -- a
+# previous version of parse_docker_logs() shelled out to
+# `docker compose logs`, which always raised FileNotFoundError in that
+# environment (confirmed live: every real deployment hit this, not just a
+# rare edge case) and silently fell back to a canned message generator
+# (get_synthetic_logs(), now removed) that produced data completely
+# disconnected from real service behavior -- the same message text
+# appeared under every severity level depending on list position, not
+# message content. docker-compose.yml now mounts the host's Docker socket
+# into zerodb-api specifically so this endpoint can read real container
+# logs via the Docker Engine API instead.
+_docker_client = None
+
+
+def _get_docker_client():
+    """
+    Lazily create the module-level Docker client. Deferred rather than
+    created at import time so importing this router doesn't require a
+    reachable Docker socket (e.g. under lite mode, or in tests that don't
+    exercise this endpoint).
+    """
+    global _docker_client
+    if _docker_client is None:
+        import docker
+        _docker_client = docker.from_env()
+    return _docker_client
+
+
+def _extract_level(line: str) -> str:
+    """
+    Best-effort severity extraction from a raw container log line. Real
+    services each use their own log format (Postgres's "LOG:"/"ERROR:",
+    uvicorn's "INFO:", etc.) -- this looks for a recognizable level token
+    anywhere in the line rather than assuming one fixed format, and falls
+    back to INFO (not ERROR) for a line that doesn't name one, since most
+    unlabeled output is routine (e.g. Postgres's multi-line DETAIL/STATEMENT
+    continuation lines for an error already reported on the line above).
+    """
+    match = _LEVEL_PATTERN.search(line)
+    if not match:
+        return "INFO"
+    level = match.group(1).upper()
+    return _LEVEL_ALIASES.get(level, level)
+
+
 def parse_docker_logs(service_name: str, limit: int = 100) -> List[LogEntry]:
     """
-    Parse Docker Compose logs for a specific service
-    Extracts timestamp, level, and message from logs
+    Fetch real logs for a service's container via the Docker Engine API.
+
+    Args:
+        service_name: Service name as used in docker-compose.yml
+            (postgres, qdrant, minio, redpanda, embeddings, api, dashboard)
+        limit: Maximum number of lines to fetch
+
+    Returns:
+        list: Parsed, real log entries for this service, most recent last
+        (matches Docker's own `logs()` ordering; get_logs() re-sorts).
+        Empty if the container can't be reached -- logged, not fabricated.
     """
-    logs = []
+    container_name = f"zerodb-{service_name}"
 
     try:
-        # Try to get logs from Docker Compose
-        result = subprocess.run(
-            ["docker", "compose", "logs", "--tail", str(limit), service_name],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            cwd="/Users/aideveloper/core/zerodb-local"
+        client = _get_docker_client()
+        container = client.containers.get(container_name)
+        raw = container.logs(tail=limit, timestamps=True).decode(
+            "utf-8", errors="replace"
         )
-
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if not line.strip():
-                    continue
-
-                # Parse log line - format: service_name | timestamp | level | message
-                # Example: zerodb-api-1  | 2026-02-27 10:30:45 | INFO | Server started
-                parsed = parse_log_line(line, service_name)
-                if parsed:
-                    logs.append(parsed)
-
-    except subprocess.TimeoutExpired:
-        logging.warning(f"Docker logs timeout for service: {service_name}")
-    except FileNotFoundError:
-        # Docker not available - return synthetic logs for development
-        logging.warning("Docker not available, returning synthetic logs")
-        return get_synthetic_logs(service_name, limit)
     except Exception as e:
-        logging.error(f"Error fetching Docker logs: {e}")
+        logging.warning(
+            "Could not fetch real logs for %s (container %s): %s",
+            service_name, container_name, e,
+        )
+        return []
 
-    return logs
-
-
-def parse_log_line(line: str, service_name: str) -> Optional[LogEntry]:
-    """
-    Parse a single log line into LogEntry
-    Handles multiple log formats (Docker, uvicorn, generic)
-    """
-    # Pattern 1: Docker Compose format
-    # service-1  | 2026-02-27 10:30:45 | INFO | message
-    docker_pattern = r'^[\w-]+\s+\|\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+\|\s+(\w+)\s+\|\s+(.+)$'
-
-    # Pattern 2: Python logging format
-    # 2026-02-27 10:30:45,123 - service - INFO - message
-    python_pattern = r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}),\d+\s+-\s+\w+\s+-\s+(\w+)\s+-\s+(.+)$'
-
-    # Pattern 3: Simple timestamp format
-    # [2026-02-27 10:30:45] INFO: message
-    simple_pattern = r'^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+(\w+):\s+(.+)$'
-
-    for pattern in [docker_pattern, python_pattern, simple_pattern]:
-        match = re.match(pattern, line.strip())
-        if match:
-            try:
-                timestamp_str, level, message = match.groups()
-                timestamp = datetime.fromisoformat(timestamp_str.replace(',', '.'))
-
-                return LogEntry(
-                    timestamp=timestamp,
-                    level=level.upper(),
-                    service=service_name,
-                    message=message.strip(),
-                    source=service_name
-                )
-            except Exception as e:
-                logging.debug(f"Failed to parse matched log line: {e}")
-                continue
-
-    # If no pattern matches, create basic entry with current timestamp
-    return LogEntry(
-        timestamp=datetime.now(),
-        level="INFO",
-        service=service_name,
-        message=line.strip(),
-        source=service_name
-    )
-
-
-def get_synthetic_logs(service_name: str, limit: int) -> List[LogEntry]:
-    """
-    Generate synthetic logs for development/demo purposes
-    Used when Docker is not available
-    """
-    base_time = datetime.now()
     logs = []
+    for line in raw.split("\n"):
+        if not line.strip():
+            continue
+        # Docker's `timestamps=True` prefixes every line with its own
+        # RFC3339Nano timestamp and a single space, independent of
+        # whatever timestamp format (or none) the service itself writes --
+        # e.g. "2026-11-23T23:44:28.678555631Z 2026-11-23 23:44:28.678 UTC ...".
+        ts_str, _, rest = line.partition(" ")
+        try:
+            # get_logs()'s cutoff_time and the lite-mode path's own parsed
+            # timestamps (lite/log_capture.py's read_logs(), via naive
+            # strptime with no %z) are both timezone-naive -- stripping
+            # tzinfo here (the value is already real UTC from Docker, just
+            # represented without an explicit offset) keeps LogEntry.timestamp
+            # comparable across both code paths instead of crashing with
+            # "can't compare offset-naive and offset-aware datetimes".
+            timestamp = datetime.fromisoformat(
+                ts_str.replace("Z", "+00:00")
+            ).replace(tzinfo=None)
+        except ValueError:
+            timestamp = datetime.utcnow()
+            rest = line
 
-    messages = {
-        "postgres": [
-            "Database connection established",
-            "Query executed in 12ms",
-            "Connection pool size: 8/20",
-            "Checkpoint completed",
-            "Vacuum process completed",
-        ],
-        "qdrant": [
-            "Vector collection initialized",
-            "Search query completed in 45ms",
-            "Index built successfully",
-            "Collection size: 1024 vectors",
-            "Memory usage: 128MB",
-        ],
-        "minio": [
-            "Object uploaded: file_123.txt",
-            "Bucket created: project-files",
-            "Storage usage: 2.5GB",
-            "Object download completed",
-            "Cleanup job completed",
-        ],
-        "redpanda": [
-            "Topic created: events",
-            "Message published to topic",
-            "Consumer group registered",
-            "Partition rebalance completed",
-            "Throughput: 1000 msg/s",
-        ],
-        "embeddings": [
-            "Model loaded: BAAI/bge-base-en-v1.5",
-            "Embedding generated in 23ms",
-            "Batch size: 32 documents",
-            "GPU memory: 512MB",
-            "Model warmup completed",
-        ],
-        "api": [
-            "Server started on port 8000",
-            "Request: GET /v1/projects",
-            "Response time: 15ms",
-            "WebSocket connection established",
-            "Authentication successful",
-        ],
-        "dashboard": [
-            "React app initialized",
-            "User navigated to /logs",
-            "API client connected",
-            "State updated successfully",
-            "Component rendered in 8ms",
-        ]
-    }
-
-    levels = ["DEBUG", "INFO", "INFO", "INFO", "WARNING", "ERROR"]
-    service_messages = messages.get(service_name, ["Generic log message"])
-
-    for i in range(min(limit, 50)):
         logs.append(LogEntry(
-            timestamp=base_time - timedelta(seconds=i * 10),
-            level=levels[i % len(levels)],
+            timestamp=timestamp,
+            level=_extract_level(rest),
             service=service_name,
-            message=service_messages[i % len(service_messages)],
-            source=f"{service_name}-1"
+            message=rest.strip(),
+            source=container_name,
         ))
 
-    return sorted(logs, key=lambda x: x.timestamp, reverse=True)
+    return logs
 
 
 @router.get("/logs", response_model=LogsResponse, tags=["Logs"])
