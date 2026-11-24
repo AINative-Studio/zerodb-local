@@ -6,9 +6,9 @@ from datetime import datetime
 from uuid import UUID, uuid4
 from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Boolean, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-from sqlalchemy.ext.declarative import declarative_base
 
-Base = declarative_base()
+from database import Base
+from models.project import Project  # noqa: F401 -- registers `projects` on Base.metadata so ForeignKey('projects.id') below resolves. Refs #129.
 
 
 class SchemaComparison(Base):
