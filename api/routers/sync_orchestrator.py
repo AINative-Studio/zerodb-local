@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from database import get_db
+from services.database_service import database_service
 from schemas.sync_orchestrator import (
     SyncPlan,
     SyncPlanRequest,
@@ -30,7 +30,7 @@ from services.sync_plan_service import SyncPlanService
 router = APIRouter(prefix="/v1/projects", tags=["sync-orchestrator"])
 
 
-def get_sync_orchestrator(db: Session = Depends(get_db)) -> SyncOrchestrator:
+def get_sync_orchestrator(db: Session = Depends(database_service.get_db)) -> SyncOrchestrator:
     """Dependency to get sync orchestrator instance"""
     return SyncOrchestrator(
         db=db,
@@ -69,7 +69,7 @@ async def plan_sync(
     request: SyncPlanRequest,
     orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator),
     plan_service: SyncPlanService = Depends(get_sync_plan_service),
-    db: Session = Depends(get_db)
+    db: Session = Depends(database_service.get_db)
 ) -> SyncPlan:
     """
     Generate sync plan
@@ -135,7 +135,7 @@ async def execute_sync(
     request: SyncExecuteRequest,
     orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator),
     plan_service: SyncPlanService = Depends(get_sync_plan_service),
-    db: Session = Depends(get_db)
+    db: Session = Depends(database_service.get_db)
 ) -> SyncResult:
     """
     Execute sync plan
@@ -250,7 +250,7 @@ async def validate_sync_plan(
     plan_id: UUID,
     orchestrator: SyncOrchestrator = Depends(get_sync_orchestrator),
     plan_service: SyncPlanService = Depends(get_sync_plan_service),
-    db: Session = Depends(get_db)
+    db: Session = Depends(database_service.get_db)
 ) -> ValidationResult:
     """
     Validate sync plan
