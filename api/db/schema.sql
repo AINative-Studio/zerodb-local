@@ -253,6 +253,12 @@ CREATE INDEX IF NOT EXISTS idx_conflict_log_created_at ON conflict_log(project_i
 -- "relation sync_plans does not exist", silently swallowed on the preview
 -- endpoint (confirmed live) and a hard 500 on execute. Columns below
 -- mirror that model exactly.
+--
+-- warnings is JSONB, not TEXT[] -- api/schemas/sync_orchestrator.py's
+-- SyncWarning is a structured object (severity/message/category), not a
+-- bare string, and dashboard/app/sync/page.tsx already renders
+-- `w.message` expecting that structure. A plain string array would have
+-- silently broken that rendering even if the insert itself worked.
 CREATE TABLE IF NOT EXISTS sync_plans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     plan_id UUID NOT NULL UNIQUE,
@@ -266,7 +272,7 @@ CREATE TABLE IF NOT EXISTS sync_plans (
     estimated_data_size_bytes INTEGER NOT NULL DEFAULT 0,
     schema_changes JSONB NOT NULL,
     conflicts JSONB NOT NULL,
-    warnings TEXT[] NOT NULL DEFAULT '{}',
+    warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
     requires_approval BOOLEAN NOT NULL DEFAULT FALSE,
     can_rollback BOOLEAN NOT NULL DEFAULT TRUE,
     approved_by VARCHAR(255),

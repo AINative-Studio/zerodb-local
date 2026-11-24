@@ -281,6 +281,41 @@ class TestSyncPlansMigration:
             assert row[1] is False  # default
             assert row[2] is True  # default
 
+    def test_warnings_column_holds_structured_objects(self, test_engine):
+        """
+        Refs #131: warnings is JSONB, not TEXT[] -- it must hold the
+        structured {severity, message, category} shape
+        schemas/sync_orchestrator.py's SyncWarning produces and
+        dashboard/app/sync/page.tsx's `w.message` rendering expects, not
+        a flat list of strings.
+        """
+        with test_engine.connect() as conn:
+            apply_pending_migrations(conn)
+
+            project_id = conn.execute(text(
+                "INSERT INTO projects (name, user_id) VALUES "
+                "('sync-plans-warnings-test', "
+                "'00000000-0000-0000-0000-000000000001') RETURNING id"
+            )).scalar()
+
+            plan_id = conn.execute(text(
+                "INSERT INTO sync_plans "
+                "(plan_id, project_id, direction, steps, entity_counts, "
+                "schema_changes, conflicts, warnings) "
+                "VALUES (gen_random_uuid(), :project_id, 'push', "
+                "'[]'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, "
+                "'[{\"severity\": \"low\", \"message\": \"No entities to sync\", "
+                "\"category\": \"data\"}]'::jsonb) "
+                "RETURNING plan_id"
+            ), {"project_id": project_id}).scalar()
+            conn.commit()
+
+            warnings = conn.execute(
+                text("SELECT warnings FROM sync_plans WHERE plan_id = :pid"),
+                {"pid": plan_id},
+            ).scalar()
+            assert warnings == [{"severity": "low", "message": "No entities to sync", "category": "data"}]
+
     def test_migration_is_idempotent(self, test_engine):
         with test_engine.connect() as conn:
             apply_pending_migrations(conn)
