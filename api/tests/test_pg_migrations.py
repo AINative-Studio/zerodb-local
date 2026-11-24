@@ -201,3 +201,93 @@ class TestPostgresSchemaMigration:
             # No seeding: whatever schema.sql / init.sh already produced in
             # the test database is the baseline.
             apply_pending_migrations(conn)  # must not raise
+
+
+class TestSyncPlansMigration:
+    """
+    Refs #127: api/models/sync_plan.py's SyncPlan ORM model has existed
+    with no backing table anywhere -- every real /sync/plan and
+    /sync/execute call failed with
+    "relation sync_plans does not exist". These test only that the table
+    and its shape now exist via the migration runner; actually inserting
+    through the ORM is still blocked by the separate, systemic bug
+    tracked as #129 (see test_sync_plan_persistence.py's skip reason) --
+    this intentionally uses raw SQL, not the SyncPlan model, to stay
+    within #127's actual scope.
+    """
+
+    def test_creates_sync_plans_table_with_expected_columns(self, test_engine):
+        with test_engine.connect() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS sync_plans CASCADE"))
+            # Also clear the tracking row -- otherwise apply_pending_migrations()
+            # correctly (by design) skips re-running a migration it already
+            # recorded as applied in an earlier test in this same session-scoped
+            # test_engine, even though this test just dropped its table.
+            conn.execute(text(
+                "DELETE FROM schema_migrations WHERE id = '127_create_sync_plans'"
+            ))
+            conn.commit()
+
+            apply_pending_migrations(conn)
+
+            cols = {
+                row[0] for row in conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'sync_plans'"
+                )).fetchall()
+            }
+            expected = {
+                "id", "plan_id", "project_id", "direction", "status",
+                "steps", "total_steps", "entity_counts",
+                "estimated_duration_seconds", "estimated_data_size_bytes",
+                "schema_changes", "conflicts", "warnings",
+                "requires_approval", "can_rollback", "approved_by",
+                "approved_at", "executed_at", "completed_at",
+                "sync_result_id", "created_at", "expires_at",
+            }
+            assert expected.issubset(cols)
+
+    def test_raw_insert_and_select_round_trips(self, test_engine):
+        """
+        Confirms the table itself (constraints, column types, FK to
+        projects) is genuinely usable for real rows, independent of
+        whether the ORM layer can write to it (#129).
+        """
+        with test_engine.connect() as conn:
+            apply_pending_migrations(conn)
+
+            project_id = conn.execute(text(
+                "INSERT INTO projects (name, user_id) VALUES "
+                "('sync-plans-migration-test', "
+                "'00000000-0000-0000-0000-000000000001') RETURNING id"
+            )).scalar()
+
+            plan_id = conn.execute(text(
+                "INSERT INTO sync_plans "
+                "(plan_id, project_id, direction, steps, entity_counts, "
+                "schema_changes, conflicts) "
+                "VALUES (gen_random_uuid(), :project_id, 'push', "
+                "'[]'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb) "
+                "RETURNING plan_id"
+            ), {"project_id": project_id}).scalar()
+            conn.commit()
+
+            row = conn.execute(
+                text("SELECT status, requires_approval, can_rollback FROM sync_plans WHERE plan_id = :pid"),
+                {"pid": plan_id},
+            ).first()
+            assert row is not None
+            assert row[0] == "pending"  # default
+            assert row[1] is False  # default
+            assert row[2] is True  # default
+
+    def test_migration_is_idempotent(self, test_engine):
+        with test_engine.connect() as conn:
+            apply_pending_migrations(conn)
+            apply_pending_migrations(conn)  # must not raise on a second run
+
+            applied = {
+                row[0]
+                for row in conn.execute(text("SELECT id FROM schema_migrations")).fetchall()
+            }
+            assert "127_create_sync_plans" in applied

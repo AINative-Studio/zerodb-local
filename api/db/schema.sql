@@ -245,6 +245,46 @@ CREATE INDEX IF NOT EXISTS idx_conflict_log_entity ON conflict_log(project_id, e
 CREATE INDEX IF NOT EXISTS idx_conflict_log_created_at ON conflict_log(project_id, created_at DESC);
 
 -- ==========================================
+-- SYNC PLANS TABLE
+-- ==========================================
+-- Refs #127: api/models/sync_plan.py's SyncPlan ORM model has existed with
+-- no backing table in any schema file or migration -- every real
+-- /sync/plan and /sync/execute call failed with
+-- "relation sync_plans does not exist", silently swallowed on the preview
+-- endpoint (confirmed live) and a hard 500 on execute. Columns below
+-- mirror that model exactly.
+CREATE TABLE IF NOT EXISTS sync_plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    plan_id UUID NOT NULL UNIQUE,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    direction VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    steps JSONB NOT NULL,
+    total_steps INTEGER NOT NULL DEFAULT 0,
+    entity_counts JSONB NOT NULL,
+    estimated_duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    estimated_data_size_bytes INTEGER NOT NULL DEFAULT 0,
+    schema_changes JSONB NOT NULL,
+    conflicts JSONB NOT NULL,
+    warnings TEXT[] NOT NULL DEFAULT '{}',
+    requires_approval BOOLEAN NOT NULL DEFAULT FALSE,
+    can_rollback BOOLEAN NOT NULL DEFAULT TRUE,
+    approved_by VARCHAR(255),
+    approved_at TIMESTAMP WITHOUT TIME ZONE,
+    executed_at TIMESTAMP WITHOUT TIME ZONE,
+    completed_at TIMESTAMP WITHOUT TIME ZONE,
+    sync_result_id UUID,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+    expires_at TIMESTAMP WITHOUT TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_plans_plan_id ON sync_plans(plan_id);
+CREATE INDEX IF NOT EXISTS idx_sync_plans_project_id ON sync_plans(project_id);
+CREATE INDEX IF NOT EXISTS idx_sync_plans_status ON sync_plans(status);
+CREATE INDEX IF NOT EXISTS idx_sync_plans_created_at ON sync_plans(created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_plans_expires_at ON sync_plans(expires_at);
+
+-- ==========================================
 -- UPDATED_AT TRIGGER FUNCTION
 -- ==========================================
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -329,3 +369,4 @@ COMMENT ON TABLE sync_state IS 'Tracks sync state between local and cloud';
 COMMENT ON TABLE change_log IS 'Change data capture log for incremental sync';
 COMMENT ON TABLE sync_history IS 'Audit log of sync operations';
 COMMENT ON TABLE conflict_log IS 'Conflict resolution history';
+COMMENT ON TABLE sync_plans IS 'Generated sync plans awaiting approval/execution';
