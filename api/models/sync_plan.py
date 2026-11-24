@@ -4,8 +4,8 @@ Stores generated sync plans for execution and validation
 """
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Boolean, Float, Text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB, ARRAY
+from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Boolean, Float
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -57,7 +57,13 @@ class SyncPlan(Base):
     conflicts = Column(JSONB, nullable=False)  # ConflictInfo object as JSON
 
     # Warnings and flags
-    warnings = Column(ARRAY(Text), nullable=False, default=[])
+    # Refs #131: JSONB, not ARRAY(Text) -- schemas/sync_orchestrator.py's
+    # SyncWarning is a structured object (severity/message/category), and
+    # dashboard/app/sync/page.tsx already renders `w.message` expecting
+    # that shape. A plain string array can't even hold the real data
+    # (psycopg2 can't adapt a SyncWarning Pydantic object to TEXT[]) and
+    # would have silently broken the dashboard's rendering regardless.
+    warnings = Column(JSONB, nullable=False, default=list)
     requires_approval = Column(Boolean, nullable=False, default=False)
     can_rollback = Column(Boolean, nullable=False, default=True)
 

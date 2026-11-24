@@ -71,7 +71,12 @@ class SyncPlanService:
             estimated_data_size_bytes=sync_plan.estimated_data_size_bytes,
             schema_changes=plan_dict['schema_changes'],
             conflicts=plan_dict['conflicts'],
-            warnings=sync_plan.warnings,
+            # Refs #131: was `sync_plan.warnings` -- the raw list of
+            # SyncWarning Pydantic objects, which psycopg2 can't adapt to
+            # any column type. Every other structured field here correctly
+            # reads from plan_dict (the JSON-serialized dict form); this
+            # one just hadn't been.
+            warnings=plan_dict['warnings'],
             requires_approval=sync_plan.requires_approval,
             can_rollback=sync_plan.can_rollback,
             expires_at=expires_at

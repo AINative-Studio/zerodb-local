@@ -138,12 +138,13 @@ def sample_approval_required_plan():
 
 
 @pytest.mark.skip(
-    reason="sync_plans table (models/sync_plan.py) has no schema.sql/"
-    "migration creating it -- a real full-mode Postgres 500s "
-    "'relation \"sync_plans\" does not exist' on every one of these. "
-    "Genuinely missing production schema (Refs #1249), not a test-wiring "
-    "problem; out of scope for #50 to design and add that migration. "
-    "Remove this skip once the migration lands."
+    reason="sync_plans table now exists (Refs #127) but every ORM insert "
+    "against it still raises sqlalchemy.exc.NoReferencedTableError -- "
+    "ForeignKey('projects.id') can't resolve because there is no ORM "
+    "model for `projects` registered in any model file's own isolated "
+    "declarative_base(). A systemic bug across multiple models (Refs "
+    "#129), not specific to sync_plans -- out of scope for #127 to fix. "
+    "Remove this skip once #129 lands."
 )
 class TestSyncPlanService:
     """Test suite for SyncPlanService"""
@@ -393,8 +394,7 @@ class TestSyncPlanService:
 
 
 @pytest.mark.skip(
-    reason="sync_plans table has no schema.sql/migration creating it -- "
-    "see TestSyncPlanService's skip reason above. Refs #1249."
+    reason="see TestSyncPlanService's skip reason above. Refs #127, #129."
 )
 class TestSyncPlanAPI:
     """Test suite for sync plan API endpoints"""
