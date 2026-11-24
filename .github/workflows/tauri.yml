@@ -68,6 +68,15 @@ jobs:
         run: |
           softwareupdate --install-rosetta --agree-to-license
           arch -x86_64 /usr/bin/python3 -m venv /tmp/x86-venv || arch -x86_64 python3 -m venv /tmp/x86-venv
+          # The system/Rosetta Python's bundled pip (21.2.4 on this runner image)
+          # predates PEP 660 editable installs for pyproject.toml-only projects
+          # (no setup.py) -- confirmed directly: "File 'setup.py' or 'setup.cfg'
+          # not found... editable mode currently requires a setuptools-based
+          # build." Upgrading pip inside the venv first fixes it, same as the
+          # arm64 leg already gets for free from actions/setup-python's modern
+          # pip.
+          arch -x86_64 /tmp/x86-venv/bin/pip install --upgrade pip
+          arch -x86_64 /tmp/x86-venv/bin/pip --version
 
       - name: Build sidecar binary (x86_64, via Rosetta)
         run: |
