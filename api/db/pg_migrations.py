@@ -247,6 +247,23 @@ def _migrate_conflict_log_columns(conn: Connection) -> None:
     conn.execute(text("DROP TABLE conflict_log_pre_migration_121"))
 
 
+def _migrate_create_sync_plans(conn: Connection) -> None:
+    """
+    Refs #127: api/models/sync_plan.py's SyncPlan ORM model has existed
+    with no backing table in any schema file or migration -- confirmed
+    live as the cause of every /sync/plan and /sync/execute call failing
+    with "relation sync_plans does not exist" (silently swallowed on the
+    preview endpoint, a hard 500 on execute). No old shape to reconcile
+    here, unlike sync_history/conflict_log above -- this table simply
+    never existed, so a plain idempotent CREATE is sufficient.
+    """
+    if _table_exists(conn, "sync_plans"):
+        return
+
+    logger.info("Creating missing sync_plans table (Refs #127)")
+    conn.execute(text(_SYNC_PLANS_CREATE))
+
+
 # Mirrors api/db/migrations/004_sync_history.sql and 004_conflict_log.sql
 # exactly -- kept here instead of reading those files at runtime so each
 # migration is a single, self-contained, independently reviewable unit,
@@ -288,6 +305,40 @@ CREATE TABLE conflict_log (
 )
 """
 
+# Mirrors api/models/sync_plan.py's SyncPlan ORM model exactly -- see
+# _migrate_create_sync_plans() above (Refs #127).
+_SYNC_PLANS_CREATE = """
+CREATE TABLE sync_plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    plan_id UUID NOT NULL UNIQUE,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    direction VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    steps JSONB NOT NULL,
+    total_steps INTEGER NOT NULL DEFAULT 0,
+    entity_counts JSONB NOT NULL,
+    estimated_duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    estimated_data_size_bytes INTEGER NOT NULL DEFAULT 0,
+    schema_changes JSONB NOT NULL,
+    conflicts JSONB NOT NULL,
+    warnings TEXT[] NOT NULL DEFAULT '{}',
+    requires_approval BOOLEAN NOT NULL DEFAULT FALSE,
+    can_rollback BOOLEAN NOT NULL DEFAULT TRUE,
+    approved_by VARCHAR(255),
+    approved_at TIMESTAMP WITHOUT TIME ZONE,
+    executed_at TIMESTAMP WITHOUT TIME ZONE,
+    completed_at TIMESTAMP WITHOUT TIME ZONE,
+    sync_result_id UUID,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+    expires_at TIMESTAMP WITHOUT TIME ZONE
+);
+CREATE INDEX idx_sync_plans_plan_id ON sync_plans(plan_id);
+CREATE INDEX idx_sync_plans_project_id ON sync_plans(project_id);
+CREATE INDEX idx_sync_plans_status ON sync_plans(status);
+CREATE INDEX idx_sync_plans_created_at ON sync_plans(created_at);
+CREATE INDEX idx_sync_plans_expires_at ON sync_plans(expires_at);
+"""
+
 
 # Ordered list of (migration_id, function) -- migration_id must never
 # change once released (it's the tracking key in schema_migrations), and
@@ -296,6 +347,7 @@ MIGRATIONS: List[Migration] = [
     ("121_change_log_synced_at", _migrate_change_log_synced_at),
     ("121_sync_history_column_rename", _migrate_sync_history_columns),
     ("121_conflict_log_column_rename", _migrate_conflict_log_columns),
+    ("127_create_sync_plans", _migrate_create_sync_plans),
 ]
 
 
