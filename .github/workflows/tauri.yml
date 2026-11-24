@@ -1,16 +1,26 @@
 name: macOS Desktop Build (Tauri)
 
+# Refs #143 (desktop ship plan, EPIC-B): paths/working-directory used to
+# say 'zerodb-local/desktop/**' and 'zerodb-local/desktop', matching this
+# repo's layout BEFORE #1 ("Flatten repo layout -- promote zerodb-local/*
+# to repo root") moved desktop/ (and everything else) up to the repo
+# root. Same bug class ci.yml documents fixing for itself (Refs #43):
+# both historical runs of this workflow show `failure` -- the run right
+# after the flatten failed in 20 seconds (cd into a directory that no
+# longer existed), and the paths: filter has matched nothing since.
+# Updated every path to the real post-flatten 'desktop/' layout.
+
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
     branches: [main]
     paths:
-      - 'zerodb-local/desktop/**'
+      - 'desktop/**'
       - '.github/workflows/tauri.yml'
   pull_request:
     paths:
-      - 'zerodb-local/desktop/**'
+      - 'desktop/**'
 
 jobs:
   build-macos:
@@ -25,7 +35,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: zerodb-local/desktop/package-lock.json
+          cache-dependency-path: desktop/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,15 +48,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python deps
-        working-directory: zerodb-local
         run: pip install -e ".[lite]"
 
       - name: Install Node deps
-        working-directory: zerodb-local/desktop
+        working-directory: desktop
         run: npm ci
 
       - name: Build Tauri app (universal binary)
-        working-directory: zerodb-local/desktop
+        working-directory: desktop
         run: npx tauri build --target universal-apple-darwin
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -56,10 +65,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ZeroDBLocal-macOS-${{ github.ref_name }}
-          path: zerodb-local/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: zerodb-local/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          files: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
