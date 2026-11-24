@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from database import get_db
+from services.database_service import database_service
 from schemas.export import (
     ExportCreate,
     ExportResponse,
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/v1/projects", tags=["export"])
 async def create_export(
     project_id: UUID = Path(..., description="Project UUID"),
     export_request: ExportCreate = ...,
-    db: Session = Depends(get_db)
+    db: Session = Depends(database_service.get_db)
 ):
     """
     Create an export bundle for the project
@@ -98,7 +98,7 @@ async def create_export(
 async def download_export(
     project_id: UUID = Path(..., description="Project UUID"),
     export_id: UUID = Path(..., description="Export UUID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(database_service.get_db)
 ):
     """
     Download an export bundle
@@ -156,7 +156,7 @@ async def preview_export(
         None,
         description="Timestamp for incremental export"
     ),
-    db: Session = Depends(get_db)
+    db: Session = Depends(database_service.get_db)
 ):
     """
     Preview what would be exported without creating the bundle

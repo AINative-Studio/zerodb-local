@@ -415,16 +415,6 @@ class TestSyncPlanService:
         assert plan is None
 
 
-@pytest.mark.skip(
-    reason="sync_orchestrator.py's routes depend on database.get_db "
-    "directly instead of database_service.get_db (the one this test "
-    "suite's `client` fixture overrides to share its transaction) -- a "
-    "project created via client.post('/v1/projects', ...) is invisible "
-    "to these endpoints' own, separate DB session, so every one of these "
-    "hits a real FK violation or 404 even though the project genuinely "
-    "exists. Pre-existing, not specific to sync_plans -- filed as #132. "
-    "Remove this skip once #132 lands."
-)
 class TestSyncPlanAPI:
     """Test suite for sync plan API endpoints"""
 
