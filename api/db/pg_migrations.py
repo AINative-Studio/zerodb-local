@@ -306,7 +306,8 @@ CREATE TABLE conflict_log (
 """
 
 # Mirrors api/models/sync_plan.py's SyncPlan ORM model exactly -- see
-# _migrate_create_sync_plans() above (Refs #127).
+# _migrate_create_sync_plans() above (Refs #127). warnings is JSONB, not
+# TEXT[] -- see the matching comment in schema.sql for why.
 _SYNC_PLANS_CREATE = """
 CREATE TABLE sync_plans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -321,7 +322,7 @@ CREATE TABLE sync_plans (
     estimated_data_size_bytes INTEGER NOT NULL DEFAULT 0,
     schema_changes JSONB NOT NULL,
     conflicts JSONB NOT NULL,
-    warnings TEXT[] NOT NULL DEFAULT '{}',
+    warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
     requires_approval BOOLEAN NOT NULL DEFAULT FALSE,
     can_rollback BOOLEAN NOT NULL DEFAULT TRUE,
     approved_by VARCHAR(255),
