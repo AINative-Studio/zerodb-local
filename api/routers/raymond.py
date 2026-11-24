@@ -42,7 +42,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from services.vector_service import vector_service
-from database import get_db
+from services.database_service import database_service
 
 router = APIRouter(prefix="/v1/raymond", tags=["raymond"])
 
@@ -126,7 +126,7 @@ async def ask(project_id: str, body: AskRequest):
     Retrieve the corpus chunks most relevant to a question, with full
     citations. Does not synthesize a prose answer (see module docstring).
     """
-    db = next(get_db())
+    db = next(database_service.get_db())
     try:
         results = await vector_service.search_vectors(
             db=db,

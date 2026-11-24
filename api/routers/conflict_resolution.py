@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from database import get_db
+from services.database_service import database_service
 from services.conflict_resolver import ConflictResolver, ConflictResolutionStrategy
 from schemas.conflict_resolution import (
     Conflict,
@@ -30,7 +30,7 @@ async def list_conflicts(
     entity_type: Optional[str] = Query(None, description="Filter by entity type"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(database_service.get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -63,7 +63,7 @@ async def list_conflicts(
 async def get_conflict(
     project_id: UUID,
     conflict_id: UUID,
-    db: Session = Depends(get_db),
+    db: Session = Depends(database_service.get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -94,7 +94,7 @@ async def resolve_conflict(
     project_id: UUID,
     conflict_id: UUID,
     request: ConflictResolutionRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(database_service.get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -182,7 +182,7 @@ async def resolve_conflict(
 async def resolve_all_conflicts(
     project_id: UUID,
     request: AutoResolveRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(database_service.get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -237,7 +237,7 @@ async def resolve_all_conflicts(
 @router.get("/summary", response_model=dict)
 async def get_conflict_summary(
     project_id: UUID,
-    db: Session = Depends(get_db),
+    db: Session = Depends(database_service.get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
