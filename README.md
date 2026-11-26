@@ -19,6 +19,16 @@ Two ways to run it:
 
 ---
 
+## Desktop App
+
+The fastest way to try ZeroDB on macOS: no `pip install`, no terminal.
+
+**[Download ZeroDB Desktop for macOS](https://github.com/AINative-Studio/zerodb-local/releases/latest)** — a signed, notarized app with the server and dashboard built in. Open the `.dmg`, drag ZeroDB to Applications, launch it, and the dashboard opens automatically with the server already running in the menu bar.
+
+Windows and Linux desktop builds are planned as a fast-follow.
+
+---
+
 ## Quick start: lite mode (no Docker)
 
 **Needs:** Python 3.11+. For the dashboard, also Node.js 20+.
