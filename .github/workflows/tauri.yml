@@ -55,21 +55,26 @@ jobs:
       # x86_64 leg built FIRST, before the native arm64 setup-python step
       # below changes `python`/`python3` on PATH. actions/setup-python's
       # `architecture: x64` input does install a real x86_64 CPython
-      # binary -- but pip's own wheel-tag resolution running under it
-      # still resolved an arm64 numpy wheel (confirmed in CI: "Downloading
+      # binary -- but pip's own wheel resolution running under it
+      # resolved an arm64 numpy wheel (confirmed in CI: "Downloading
       # numpy-...-macosx_14_0_arm64.whl" while pythonLocation pointed at
       # the x64 toolcache dir), which PyInstaller then refused to bundle
       # into an x86_64 binary ("IncompatibleBinaryArchError: ... has arch:
-      # arm64"). Pip's tag detection apparently isn't reliably scoped to
-      # this specific interpreter binary on an Apple Silicon host. Every
-      # command below runs under `arch -x86_64` so the *process itself* is
-      # genuinely Rosetta-translated, not just backed by an x86_64-labeled
-      # interpreter on PATH -- that's the one thing pip's platform-tag
-      # detection can't get wrong, unlike a hand-rolled venv off
-      # `/usr/bin/python3` (confirmed directly: that one resolves to
-      # system Python 3.9.6, which fails this repo's `requires-python
-      # >=3.10`, and ships pip 21.2.4, which predates PEP 660 editable
-      # installs for pyproject.toml-only/hatchling projects).
+      # arm64"). Root cause (confirmed in a later run): pip's wheel cache
+      # is shared across both setup-python steps in this one job --
+      # watchfiles' x86_64 wheel, downloaded during this leg, got reused
+      # by the LATER arm64 leg's pip install, which then failed bundling
+      # an x86_64 .so into an arm64 binary. PIP_CACHE_DIR below gives each
+      # leg its own cache directory so neither can ever see the other's
+      # wheels. Every command also runs under `arch -x86_64` so the
+      # *process itself* is genuinely Rosetta-translated, not just backed
+      # by an x86_64-labeled interpreter on PATH -- belt and suspenders
+      # against the same class of platform-tag confusion, unlike a
+      # hand-rolled venv off `/usr/bin/python3` (confirmed directly: that
+      # one resolves to system Python 3.9.6, which fails this repo's
+      # `requires-python >=3.10`, and ships pip 21.2.4, which predates
+      # PEP 660 editable installs for pyproject.toml-only/hatchling
+      # projects).
       - name: Set up Python 3.12 (x86_64, for the Intel sidecar build)
         uses: actions/setup-python@v5
         with:
@@ -79,6 +84,7 @@ jobs:
       - name: Build sidecar binary (x86_64)
         env:
           PYINSTALLER_TARGET_ARCH: x86_64
+          PIP_CACHE_DIR: /tmp/pip-cache-x86_64
         run: |
           arch -x86_64 python3 -c "import platform; print('machine:', platform.machine())"
           arch -x86_64 python3 -m pip install -e ".[lite]" pyinstaller
@@ -103,9 +109,11 @@ jobs:
       - name: Build sidecar binary (arm64, native)
         env:
           PYINSTALLER_TARGET_ARCH: arm64
+          PIP_CACHE_DIR: /tmp/pip-cache-arm64
         run: |
-          pip install -e ".[lite]" pyinstaller
-          pyinstaller desktop/zerodb-server.spec --distpath desktop/src-tauri/binaries --workpath /tmp/pyi-build-arm64
+          arch -arm64 python3 -c "import platform; print('machine:', platform.machine())"
+          arch -arm64 python3 -m pip install -e ".[lite]" pyinstaller
+          arch -arm64 python3 -m PyInstaller desktop/zerodb-server.spec --distpath desktop/src-tauri/binaries --workpath /tmp/pyi-build-arm64
           mv desktop/src-tauri/binaries/zerodb-server desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin
           actual_arch=$(lipo -archs desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin)
           echo "zerodb-server-aarch64-apple-darwin reports: $actual_arch"
