@@ -128,15 +128,25 @@ jobs:
 
       - name: Smoke-test both sidecar binaries
         run: |
+          # The x86_64 binary runs under Rosetta translation on this
+          # arm64 runner -- a PyInstaller onefile binary re-extracts
+          # itself on every launch, and that extraction plus Rosetta's
+          # translation overhead on top of this binary's heavy ML deps
+          # (torch, sentence-transformers, faiss) made the old 10-attempt
+          # / 1s-interval (10s total) budget too tight: run 45758350412
+          # failed with the arm64 leg healthy in ~1s but the x86_64 leg
+          # still not responding at 10s. Raised to 30 attempts / 2s (60s
+          # total) -- generous enough for Rosetta's one-time overhead,
+          # still well short of CI's job timeout.
           for bin in desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin; do
             "$bin" &
             SERVER_PID=$!
-            for i in $(seq 1 10); do
+            for i in $(seq 1 30); do
               if curl -sf http://127.0.0.1:8000/health >/dev/null; then
                 echo "$bin: healthy"
                 break
               fi
-              sleep 1
+              sleep 2
             done
             curl -sf http://127.0.0.1:8000/health || (echo "$bin: FAILED health check" && exit 1)
             kill $SERVER_PID
