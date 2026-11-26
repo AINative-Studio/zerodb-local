@@ -166,12 +166,65 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Build Tauri app (universal binary)
+      # Refs #145: importing into a dedicated, ephemeral keychain rather than
+      # the runner's default login keychain -- avoids polluting a keychain
+      # that could persist across jobs on self-hosted runners, and avoids
+      # requiring interactive keychain-unlock prompts GitHub's hosted
+      # runners can't answer. codesign/tauri look up identities across
+      # whatever's in the keychain search list, so the new keychain is
+      # added to -- not swapped in for -- that list.
+      - name: Import Developer ID certificate into a temporary keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          # Fail loudly here rather than silently producing an unsigned
+          # build if the import didn't actually work.
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "Developer ID Application" || \
+            (echo "::error::No Developer ID Application identity found in the imported keychain" && exit 1)
+
+      - name: Build Tauri app (universal binary, signed + notarized)
         working-directory: desktop
+        # Tauri's bundler itself invokes codesign and (when all four
+        # APPLE_* notarization vars are present) xcrun notarytool, and
+        # blocks on notarization's `success`/`invalid` result before
+        # producing the final .dmg -- no separate codesign/notarytool
+        # step needed here. Acceptance criterion from #145: "CI ...
+        # submits it to Apple's notary service, waiting for a `success`
+        # ticket before packaging the .dmg" is Tauri's own default
+        # behavior for this config, not something to hand-roll.
         run: npx tauri build --target universal-apple-darwin
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Toby Morning (5875BWH55P)"
+
+      - name: Verify Gatekeeper accepts the signed, notarized app
+        run: |
+          # Refs #145's third acceptance criterion: `spctl --assess --type
+          # execute` must report "accepted" on a machine with no prior
+          # exception -- a fresh GitHub-hosted runner, not this machine's
+          # own Keychain/Gatekeeper state, genuinely qualifies as that.
+          APP_PATH=$(find desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name "*.app" | head -1)
+          echo "Assessing: $APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+
+      - name: Clean up temporary keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
 
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@v4
