@@ -53,7 +53,9 @@
       "nsis": {}
     },
     "macOS": {
-      "dmg": {}
+      "dmg": {},
+      "signingIdentity": "Developer ID Application: Toby Morning (5875BWH55P)",
+      "hardenedRuntime": true
     },
     "linux": {
       "deb": {
