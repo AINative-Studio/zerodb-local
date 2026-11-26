@@ -237,3 +237,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          # Refs #148's second acceptance criterion: release notes must
+          # explicitly mention this is the desktop wrapper's first public
+          # build. generate_release_notes still adds the auto-generated
+          # commit list below this body text, not instead of it.
+          body: |
+            ZeroDB Desktop for macOS (Apple Silicon + Intel, universal binary).
+
+            This is the first public build of the ZeroDB Desktop wrapper --
+            a native macOS app bundling the ZeroDB Local server and
+            dashboard, fully signed with a Developer ID certificate and
+            notarized by Apple (no Gatekeeper warning on install).
+
+            Download the `.dmg` below, open it, and drag ZeroDB to
+            Applications.
+          generate_release_notes: true
