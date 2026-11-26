@@ -285,12 +285,22 @@ app.include_router(
 
 if __name__ == "__main__":
     import uvicorn
+    # Pass the app object directly, not the "main:app" string form. The
+    # string form makes uvicorn re-import a module literally named `main`
+    # at runtime -- fine in normal dev (api/ is on sys.path, main.py is
+    # directly importable), but PyInstaller's frozen onefile runtime
+    # doesn't expose source files as importable modules that way, so the
+    # sidecar binary failed every health check with "Could not import
+    # module main" (Refs #141/#161). reload=True requires the string
+    # form (it re-execs and re-imports on file changes) and only makes
+    # sense for local dev anyway, never for a packaged binary -- so
+    # reload is hardcoded off here; DEBUG-gated reload for local dev
+    # should use `uvicorn main:app --reload` from the CLI instead.
     uvicorn.run(
-        "main:app",
+        app,
         # Docker runs uvicorn from its own CMD (0.0.0.0 inside the container);
         # running this file directly is for local dev, so stay on loopback.
         host=os.getenv("ZERODB_HOST", "127.0.0.1"),
         port=8000,
-        reload=DEBUG,
         log_level=LOG_LEVEL.lower()
     )

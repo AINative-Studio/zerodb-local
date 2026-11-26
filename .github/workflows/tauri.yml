@@ -42,13 +42,103 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Set up Python (sidecar)
+      # Refs #141 (desktop ship plan, EPIC-A): `tauri build --target
+      # universal-apple-darwin` only auto-merges the Rust binary Cargo
+      # compiles -- externalBin sidecars are raw files Tauri just copies
+      # by exact name, so it does NOT lipo them for us (confirmed: CI
+      # failed with "resource path binaries/zerodb-server-universal-
+      # apple-darwin doesn't exist" until the explicit lipo step below
+      # was added). Built here rather than committed to git: a real
+      # PyInstaller onefile binary is ~250MB, which has no business
+      # living in version control.
+      #
+      # x86_64 leg built FIRST, before the native arm64 setup-python step
+      # below changes `python`/`python3` on PATH. actions/setup-python's
+      # `architecture: x64` input does install a real x86_64 CPython
+      # binary -- but pip's own wheel-tag resolution running under it
+      # still resolved an arm64 numpy wheel (confirmed in CI: "Downloading
+      # numpy-...-macosx_14_0_arm64.whl" while pythonLocation pointed at
+      # the x64 toolcache dir), which PyInstaller then refused to bundle
+      # into an x86_64 binary ("IncompatibleBinaryArchError: ... has arch:
+      # arm64"). Pip's tag detection apparently isn't reliably scoped to
+      # this specific interpreter binary on an Apple Silicon host. Every
+      # command below runs under `arch -x86_64` so the *process itself* is
+      # genuinely Rosetta-translated, not just backed by an x86_64-labeled
+      # interpreter on PATH -- that's the one thing pip's platform-tag
+      # detection can't get wrong, unlike a hand-rolled venv off
+      # `/usr/bin/python3` (confirmed directly: that one resolves to
+      # system Python 3.9.6, which fails this repo's `requires-python
+      # >=3.10`, and ships pip 21.2.4, which predates PEP 660 editable
+      # installs for pyproject.toml-only/hatchling projects).
+      - name: Set up Python 3.12 (x86_64, for the Intel sidecar build)
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: x64
 
-      - name: Install Python deps
-        run: pip install -e ".[lite]"
+      - name: Build sidecar binary (x86_64)
+        env:
+          PYINSTALLER_TARGET_ARCH: x86_64
+        run: |
+          arch -x86_64 python3 -c "import platform; print('machine:', platform.machine())"
+          arch -x86_64 python3 -m pip install -e ".[lite]" pyinstaller
+          arch -x86_64 python3 -m PyInstaller desktop/zerodb-server.spec --distpath /tmp/pyi-dist-x86 --workpath /tmp/pyi-build-x86
+          mv /tmp/pyi-dist-x86/zerodb-server desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin
+          # lipo -archs reads the Mach-O header itself, which can't lie
+          # about what instructions the binary contains -- the one
+          # trustworthy check regardless of what platform.machine() says.
+          actual_arch=$(lipo -archs desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin)
+          echo "zerodb-server-x86_64-apple-darwin reports: $actual_arch"
+          if [ "$actual_arch" != "x86_64" ]; then
+            echo "::error::Expected an x86_64-only binary but lipo -archs reported '$actual_arch' -- the x64 Python toolchain did not produce an x86_64 PyInstaller binary."
+            exit 1
+          fi
+
+      - name: Set up Python 3.12 (arm64, native)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
+      - name: Build sidecar binary (arm64, native)
+        env:
+          PYINSTALLER_TARGET_ARCH: arm64
+        run: |
+          pip install -e ".[lite]" pyinstaller
+          pyinstaller desktop/zerodb-server.spec --distpath desktop/src-tauri/binaries --workpath /tmp/pyi-build-arm64
+          mv desktop/src-tauri/binaries/zerodb-server desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin
+          actual_arch=$(lipo -archs desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin)
+          echo "zerodb-server-aarch64-apple-darwin reports: $actual_arch"
+          if [ "$actual_arch" != "arm64" ]; then
+            echo "::error::Expected an arm64-only binary but lipo -archs reported '$actual_arch'."
+            exit 1
+          fi
+
+      - name: Smoke-test both sidecar binaries
+        run: |
+          for bin in desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin; do
+            "$bin" &
+            SERVER_PID=$!
+            for i in $(seq 1 10); do
+              if curl -sf http://127.0.0.1:8000/health >/dev/null; then
+                echo "$bin: healthy"
+                break
+              fi
+              sleep 1
+            done
+            curl -sf http://127.0.0.1:8000/health || (echo "$bin: FAILED health check" && exit 1)
+            kill $SERVER_PID
+            wait $SERVER_PID 2>/dev/null || true
+          done
+
+      - name: Lipo sidecar binaries into a universal binary
+        run: |
+          lipo -create \
+            desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin \
+            desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin \
+            -output desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin
+          chmod +x desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin
+          lipo -info desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin
 
       - name: Install Node deps
         working-directory: desktop

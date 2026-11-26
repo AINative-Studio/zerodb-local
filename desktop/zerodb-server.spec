@@ -24,11 +24,23 @@
 # live wiring. Not fixed here: out of scope for "package the binary",
 # tracked as a note for whoever next touches api/main.py's __main__.
 
+import os
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+
+# Refs #141: target_arch=None lets PyInstaller silently pick whatever
+# architecture its own detection lands on, which on macOS has produced an
+# arm64 binary from this spec even when invoked under an x86_64 Python
+# interpreter (observed in CI: a universal2/arm64 native dependency wheel
+# appears to override the interpreter's own architecture). Setting this
+# explicitly makes PyInstaller fail the build instead of silently
+# producing the wrong slice. Opt-in via env var so the same spec still
+# works for a plain local `pyinstaller desktop/zerodb-server.spec` build
+# (target_arch=None, PyInstaller's original default) when this isn't set.
+TARGET_ARCH = os.environ.get("PYINSTALLER_TARGET_ARCH") or None
 
 # api/ is the real sys.path root this app expects (bare `from health
 # import ...`, `from routers import ...` etc. throughout api/main.py and
@@ -40,7 +52,20 @@ a = Analysis(
     [str(API_ROOT / "main.py")],
     pathex=[str(API_ROOT)],
     binaries=[],
-    datas=[],
+    # Refs #141 (desktop ship plan): PyInstaller only bundles Python modules
+    # by default -- non-.py data files read via a runtime os.path.join are
+    # invisible to its static analysis and silently absent from the onefile
+    # build. Confirmed directly in CI: lite/services/database_service_lite.py
+    # reads lite/db/schema_lite.sql relative to its own __file__ at startup,
+    # and the first real smoke-test run failed with
+    # "FileNotFoundError: ... lite/db/schema_lite.sql" the moment the server
+    # tried to initialize its SQLite schema. Bundled at the same relative
+    # path (lite/db/schema_lite.sql) it's read from, matching the real repo
+    # layout lite/services/database_service_lite.py's __file__-relative
+    # resolution expects.
+    datas=[
+        (str(REPO_ROOT / "lite" / "db" / "schema_lite.sql"), "lite/db"),
+    ],
     hiddenimports=[
         # FastAPI/uvicorn/starlette pull in a long tail of modules via
         # dynamic import that PyInstaller's static analysis misses --
@@ -92,7 +117,7 @@ exe = EXE(
     runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
-    target_arch=None,
+    target_arch=TARGET_ARCH,
     codesign_identity=None,
     entitlements_file=None,
 )
