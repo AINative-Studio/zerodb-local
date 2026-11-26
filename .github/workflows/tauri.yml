@@ -26,6 +26,15 @@ jobs:
   build-macos:
     name: Build macOS .dmg
     runs-on: macos-latest
+    # Refs #148: the full signed/notarized build (run 45878893918)
+    # succeeded all the way through -- the only failure was the final
+    # "Attach to GitHub Release" step, with a 403 "Resource not
+    # accessible by integration" because this repo's default
+    # GITHUB_TOKEN has no explicit permissions block and defaults to
+    # read-only on contents. softprops/action-gh-release needs
+    # contents: write to create a release and upload assets to it.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
