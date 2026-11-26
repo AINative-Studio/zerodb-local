@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ZeroDB",
-  "version": "0.2.0",
   "identifier": "studio.ainative.zerodb",
   "build": {
     "beforeBuildCommand": "npm run build",
