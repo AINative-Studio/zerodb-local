@@ -6,5 +6,5 @@ vectors, memory, tables, files, and events with optional
 cloud sync to ZeroDB Cloud.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.3"
 __all__ = ["__version__"]

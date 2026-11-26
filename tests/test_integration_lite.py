@@ -215,7 +215,10 @@ class TestPackageImports:
         THEN it should be a valid semver string
         """
         from zerodb_local import __version__
-        assert __version__ == "0.2.0"
+        parts = __version__.split(".")
+        assert len(parts) >= 2, f"Expected semver, got {__version__}"
+        for part in parts:
+            assert part.isdigit(), f"Non-numeric version component: {part}"
 
     def test_cli_importable(self):
         """

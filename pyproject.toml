@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zerodb-local"
-version = "0.2.0"
+version = "0.3.3"
 description = "ZeroDB Local — run ZeroDB locally without Docker"
 readme = "README.md"
 license = "MIT"

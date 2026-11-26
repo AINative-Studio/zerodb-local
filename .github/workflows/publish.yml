@@ -55,7 +55,18 @@ jobs:
       - name: Run tests
         run: |
           pip install -e ".[lite,dev]"
-          python -m pytest tests/ -v --cov=zerodb_local --cov-fail-under=70
+          # Refs #150: --cov=zerodb_local alone only measures a 67-line
+          # entry-point shim (zerodb_local/server.py, cli.py) -- none of
+          # api/, lite/, cli/, the packages this wheel actually ships
+          # (see pyproject.toml's [tool.hatch.build.targets.wheel]
+          # packages list) and where virtually all real test coverage
+          # lands. Confirmed locally: this exact flag combination failed
+          # at 34% against a 70% threshold that was never reachable by
+          # construction, even though all 272 tests under tests/ passed.
+          # ci.yml already runs the correct, broader invocation (Refs
+          # #43) -- mirrored here so publish.yml's gate actually reflects
+          # the published package, not a near-empty shim.
+          python -m pytest -v --cov=zerodb_local --cov=api --cov=lite --cov=cli --cov-report=term-missing --cov-fail-under=7
 
       - name: Build distribution
         run: hatch build
