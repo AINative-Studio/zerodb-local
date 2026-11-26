@@ -69,11 +69,23 @@ jobs:
           architecture: x64
 
       - name: Build sidecar binary (x86_64)
+        env:
+          PYINSTALLER_TARGET_ARCH: x86_64
         run: |
-          python3 -c "import platform; print('machine:', platform.machine())"
           pip install -e ".[lite]" pyinstaller
           pyinstaller desktop/zerodb-server.spec --distpath /tmp/pyi-dist-x86 --workpath /tmp/pyi-build-x86
           mv /tmp/pyi-dist-x86/zerodb-server desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin
+          # platform.machine() under Rosetta reports the HOST (arm64) kernel
+          # architecture, not the architecture the process is actually
+          # running as -- it previously looked like a correct check here and
+          # wasn't; lipo -archs reads the Mach-O header itself, which can't
+          # lie about what instructions the binary contains.
+          actual_arch=$(lipo -archs desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin)
+          echo "zerodb-server-x86_64-apple-darwin reports: $actual_arch"
+          if [ "$actual_arch" != "x86_64" ]; then
+            echo "::error::Expected an x86_64-only binary but lipo -archs reported '$actual_arch' -- the x64 Python toolchain did not produce an x86_64 PyInstaller binary."
+            exit 1
+          fi
 
       - name: Set up Python 3.12 (arm64, native)
         uses: actions/setup-python@v5
@@ -82,11 +94,18 @@ jobs:
           architecture: arm64
 
       - name: Build sidecar binary (arm64, native)
+        env:
+          PYINSTALLER_TARGET_ARCH: arm64
         run: |
-          python3 -c "import platform; print('machine:', platform.machine())"
           pip install -e ".[lite]" pyinstaller
           pyinstaller desktop/zerodb-server.spec --distpath desktop/src-tauri/binaries --workpath /tmp/pyi-build-arm64
           mv desktop/src-tauri/binaries/zerodb-server desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin
+          actual_arch=$(lipo -archs desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin)
+          echo "zerodb-server-aarch64-apple-darwin reports: $actual_arch"
+          if [ "$actual_arch" != "arm64" ]; then
+            echo "::error::Expected an arm64-only binary but lipo -archs reported '$actual_arch'."
+            exit 1
+          fi
 
       - name: Smoke-test both sidecar binaries
         run: |
