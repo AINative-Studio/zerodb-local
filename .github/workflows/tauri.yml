@@ -43,12 +43,14 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       # Refs #141 (desktop ship plan, EPIC-A): `tauri build --target
-      # universal-apple-darwin` requires an externalBin for BOTH
-      # architectures (binaries/zerodb-server-aarch64-apple-darwin AND
-      # -x86_64-apple-darwin) -- it lipo's them together itself. Built
-      # here rather than committed to git: a real PyInstaller onefile
-      # binary is ~250MB, which has no business living in version
-      # control.
+      # universal-apple-darwin` only auto-merges the Rust binary Cargo
+      # compiles -- externalBin sidecars are raw files Tauri just copies
+      # by exact name, so it does NOT lipo them for us (confirmed: CI
+      # failed with "resource path binaries/zerodb-server-universal-
+      # apple-darwin doesn't exist" until the explicit lipo step below
+      # was added). Built here rather than committed to git: a real
+      # PyInstaller onefile binary is ~250MB, which has no business
+      # living in version control.
       #
       # x86_64 leg built FIRST, before the native arm64 setup-python step
       # below changes `python`/`python3` on PATH: actions/setup-python's
@@ -102,6 +104,15 @@ jobs:
             kill $SERVER_PID
             wait $SERVER_PID 2>/dev/null || true
           done
+
+      - name: Lipo sidecar binaries into a universal binary
+        run: |
+          lipo -create \
+            desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin \
+            desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin \
+            -output desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin
+          chmod +x desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin
+          lipo -info desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin
 
       - name: Install Node deps
         working-directory: desktop
