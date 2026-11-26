@@ -193,6 +193,29 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "Developer ID Application" || \
             (echo "::error::No Developer ID Application identity found in the imported keychain" && exit 1)
 
+      # Refs #145: run 45784484893 confirmed this is needed -- Apple's
+      # notary service rejected the first signing attempt with "binary is
+      # not signed with a valid Developer ID certificate", "executable does
+      # not have the hardened runtime enabled", and "signature does not
+      # include a secure timestamp", all three against
+      # zerodb-server-aarch64-apple-darwin/-x86_64-apple-darwin/
+      # -universal-apple-darwin specifically (not the .app itself). Tauri's
+      # bundler signs the outer .app bundle and its own main binary, but
+      # externalBin sidecar resources are copied in as inert files and
+      # never get codesign'd by Tauri -- they need to be signed explicitly,
+      # before Tauri packages them, or notarization fails on exactly this.
+      - name: Codesign the sidecar binaries
+        run: |
+          IDENTITY="Developer ID Application: Toby Morning (5875BWH55P)"
+          for bin in \
+            desktop/src-tauri/binaries/zerodb-server-aarch64-apple-darwin \
+            desktop/src-tauri/binaries/zerodb-server-x86_64-apple-darwin \
+            desktop/src-tauri/binaries/zerodb-server-universal-apple-darwin; do
+            echo "Signing $bin"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$bin"
+            codesign --verify --verbose=2 "$bin"
+          done
+
       - name: Build Tauri app (universal binary, signed + notarized)
         working-directory: desktop
         # Tauri's bundler itself invokes codesign and (when all four
