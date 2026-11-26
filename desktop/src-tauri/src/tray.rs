@@ -23,7 +23,19 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let start_item = MenuItem::with_id(app, "start_server", "Start Server", true, None::<&str>)?;
     let stop_item = MenuItem::with_id(app, "stop_server", "Stop Server", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let about_item = MenuItem::with_id(app, "about", "About ZeroDB v0.2.0", true, None::<&str>)?;
+    // CARGO_PKG_VERSION is set by Cargo at compile time from Cargo.toml's
+    // [package] version -- the single source of truth for the app version
+    // (Refs #147). tauri.conf.json has no "version" field of its own
+    // anymore and falls back to reading this same Cargo.toml value;
+    // build.rs asserts package.json's version matches it too, so bumping
+    // Cargo.toml's version is the one edit that updates every surface.
+    let about_item = MenuItem::with_id(
+        app,
+        "about",
+        &format!("About ZeroDB v{}", env!("CARGO_PKG_VERSION")),
+        true,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(
