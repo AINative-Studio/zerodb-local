@@ -15,3 +15,10 @@ data/
 # Coverage artifacts
 .coverage
 htmlcov/
+
+# Desktop sidecar binaries -- built fresh per-platform in CI (see
+# .github/workflows/tauri.yml and desktop/zerodb-server.spec), never
+# committed: a real PyInstaller onefile build is ~250MB per target,
+# which has no business living in version control. Refs #141.
+desktop/src-tauri/binaries/zerodb-server*
+!desktop/src-tauri/binaries/.gitkeep
