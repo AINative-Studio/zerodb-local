@@ -3,8 +3,13 @@ ZeroDB Desktop Icons
 
 This directory contains application icons for all platforms.
 
-Required files (replace with real branding before shipping):
+Files:
 
+  app-icon-1024.png - 1024x1024 master, the real ZeroDB brand mark (the
+                      block-letter Z from the brand system, Signal Cyan
+                      on a dark tile -- same path data as IconMark in
+                      ZeroDB.AINative.Studio's src/components/ZeroDBLogo.tsx
+                      and the website's own app-icon route at src/app/icon.tsx)
   icon.png          - 512x512 PNG, used as the base icon and tray icon on Linux/macOS
   32x32.png         - 32x32 PNG, referenced in tauri.conf.json bundle.icon array
   128x128.png       - 128x128 PNG
@@ -12,20 +17,11 @@ Required files (replace with real branding before shipping):
   icon.ico          - Windows multi-resolution ICO (16/32/48/256 px)
   icon.icns         - macOS ICNS bundle (29/40/58/76/80/87/128/256/512/1024 px)
 
-Generating icons from a master PNG
------------------------------------
-Install the Tauri CLI icon generator:
+Regenerating icons from the master PNG
+---------------------------------------
+If the brand mark changes, regenerate every size with the Tauri CLI icon
+generator, run from desktop/:
 
-  npx @tauri-apps/cli icon icon-source-1024.png
+  npx @tauri-apps/cli icon src-tauri/icons/app-icon-1024.png -o src-tauri/icons
 
-This command reads a 1024x1024 PNG and writes all required sizes to this
-directory automatically.
-
-Placeholder generation (development only):
-  brew install imagemagick
-  magick -size 512x512 xc:'#0e1117' -fill '#22c55e' \
-    -draw 'ellipse 256,180 160,50 0,360' \
-    -draw 'path "M96,180 Q96,240 256,260 Q416,240 416,180"' \
-    -draw 'path "M96,240 Q96,300 256,320 Q416,300 416,240"' \
-    -draw 'path "M96,300 Q96,360 256,380 Q416,360 416,300"' \
-    icon.png
+This reads the 1024x1024 master and overwrites every size in this directory.
