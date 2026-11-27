@@ -22,3 +22,9 @@ htmlcov/
 # which has no business living in version control. Refs #141.
 desktop/src-tauri/binaries/zerodb-server*
 !desktop/src-tauri/binaries/.gitkeep
+
+# Rust/Tauri build output and generated platform scaffolding -- also
+# never belongs in version control (target/ alone is routinely several
+# GB once release + debug profiles for multiple targets accumulate).
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
