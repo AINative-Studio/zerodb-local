@@ -1,4 +1,4 @@
-name: macOS Desktop Build (Tauri)
+name: Desktop Build (Tauri)
 
 # Refs #143 (desktop ship plan, EPIC-B): paths/working-directory used to
 # say 'zerodb-local/desktop/**' and 'zerodb-local/desktop', matching this
@@ -260,4 +260,116 @@ jobs:
 
             Download the `.dmg` below, open it, and drag ZeroDB to
             Applications.
+          generate_release_notes: true
+
+  build-windows:
+    name: Build Windows .exe (NSIS)
+    runs-on: windows-latest
+    # Refs #156: no code-signing step here yet -- Authenticode is a
+    # separate certificate/purchase from the Apple Developer ID used
+    # above and is blocked on that acquisition (#157). This produces an
+    # UNSIGNED .exe/NSIS installer; Windows SmartScreen will show
+    # "Unknown publisher" until #157 lands a signing step here.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      # Mirrors the macOS job's per-arch venv isolation (one target here,
+      # so no cross-arch site-packages collision to guard against, but
+      # still isolated from the runner's system Python for a clean,
+      # reproducible build). zerodb-server.spec itself needs no
+      # Windows-specific changes (Refs #155): it builds its paths with
+      # pathlib (REPO_ROOT / "lite" / "db" / ...), which resolves
+      # correctly on Windows, and target_arch/codesign_identity/
+      # entitlements_file are macOS-only EXE() kwargs that PyInstaller
+      # ignores outright on non-macOS platforms.
+      - name: Build sidecar binary (x86_64-pc-windows-msvc)
+        run: |
+          python -m venv venv-win
+          venv-win\Scripts\Activate.ps1
+          python -m pip install -e ".[lite]" pyinstaller
+          python -m PyInstaller desktop/zerodb-server.spec --distpath dist-win --workpath build-win
+          deactivate
+          New-Item -ItemType Directory -Force -Path desktop/src-tauri/binaries | Out-Null
+          Move-Item -Force dist-win/zerodb-server.exe desktop/src-tauri/binaries/zerodb-server-x86_64-pc-windows-msvc.exe
+        shell: pwsh
+
+      - name: Smoke-test the sidecar binary
+        run: |
+          $proc = Start-Process -FilePath "desktop/src-tauri/binaries/zerodb-server-x86_64-pc-windows-msvc.exe" -PassThru
+          $healthy = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 2
+              if ($resp.StatusCode -eq 200) { $healthy = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 2
+          }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          if (-not $healthy) {
+            Write-Error "zerodb-server-x86_64-pc-windows-msvc.exe: FAILED health check"
+            exit 1
+          }
+          Write-Host "zerodb-server-x86_64-pc-windows-msvc.exe: healthy"
+        shell: pwsh
+
+      - name: Install Node deps
+        working-directory: desktop
+        run: npm ci
+
+      # No signing env vars here -- Refs #157, blocked on an Authenticode
+      # certificate. tauri build's default target on a windows-latest
+      # runner is x86_64-pc-windows-msvc, matching the sidecar binary
+      # name above; the "nsis": {} block already present in
+      # desktop/src-tauri/tauri.conf.json's bundle.windows config is what
+      # makes this produce an NSIS .exe installer instead of (or in
+      # addition to) an MSI.
+      - name: Build Tauri app (unsigned)
+        working-directory: desktop
+        run: npx tauri build
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Upload .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZeroDBLocal-Windows-${{ github.ref_name }}
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          body: |
+            ZeroDB Desktop for Windows (x86_64).
+
+            This build is UNSIGNED -- Windows SmartScreen will show an
+            "Unknown publisher" warning until Authenticode code-signing
+            (#157) is in place. Functionally identical to the signed
+            macOS build otherwise: a native app bundling the ZeroDB Local
+            server and dashboard.
+
+            Download the installer below and run it.
           generate_release_notes: true
