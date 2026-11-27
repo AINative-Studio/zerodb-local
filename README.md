@@ -21,11 +21,13 @@ Two ways to run it:
 
 ## Desktop App
 
-The fastest way to try ZeroDB on macOS: no `pip install`, no terminal.
+The fastest way to try ZeroDB: no `pip install`, no terminal. The server and dashboard are bundled into one app — install it, launch it, and the dashboard opens with the server already running in the background.
 
-**[Download ZeroDB Desktop for macOS](https://github.com/AINative-Studio/zerodb-local/releases/latest)** — a signed, notarized app with the server and dashboard built in. Open the `.dmg`, drag ZeroDB to Applications, launch it, and the dashboard opens automatically with the server already running in the menu bar.
+**[Download for macOS](https://github.com/AINative-Studio/zerodb-local/releases/latest)** — universal `.dmg` (Apple Silicon + Intel), signed and notarized by Apple, so it installs with no Gatekeeper warning. Open the `.dmg`, drag ZeroDB to Applications, and launch it.
 
-Windows and Linux desktop builds are planned as a fast-follow.
+**[Download for Windows](https://github.com/AINative-Studio/zerodb-local/releases/latest)** — x64 `.exe` installer. This build is **not yet code-signed**, so Windows SmartScreen will show an "Unknown publisher" warning — choose **More info → Run anyway** to install it. Authenticode signing is tracked in #157.
+
+Linux desktop builds are planned as a fast-follow.
 
 ---
 
