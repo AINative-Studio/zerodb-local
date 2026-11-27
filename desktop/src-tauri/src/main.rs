@@ -82,7 +82,7 @@ fn get_data_dir() -> String {
 // ---------------------------------------------------------------------------
 
 pub fn default_data_dir() -> String {
-    dirs_sys::home_dir()
+    dirs::home_dir()
         .map(|h| h.join(".zerodb").to_string_lossy().into_owned())
         .unwrap_or_else(|| ".zerodb".to_string())
 }
