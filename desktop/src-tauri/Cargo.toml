@@ -1,6 +1,6 @@
 [package]
 name = "zerodb-desktop"
-version = "0.2.0"
+version = "0.2.1"
 description = "ZeroDB Local Desktop — vector database for your machine"
 authors = ["AINative Studio"]
 license = "MIT"
